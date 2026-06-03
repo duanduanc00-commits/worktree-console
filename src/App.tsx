@@ -1351,8 +1351,9 @@ function ServicePanel({
           : actionName === "stop"
             ? await stopServiceGroup(project.id, group.id)
             : await restartServiceGroup(project.id, group.id);
+      if (groupActionRequestId.current !== requestId) return;
       const errorSummary = serviceGroupActionErrorSummary(response);
-      if (errorSummary && groupActionRequestId.current === requestId) {
+      if (errorSummary) {
         keepGroupErrorsForNextSnapshot.current = true;
         setGroupErrors((current) => ({ ...current, [group.id]: errorSummary }));
       }
@@ -1387,6 +1388,7 @@ function ServicePanel({
     });
     try {
       await removeServiceGroup(project.id, group.id);
+      if (groupActionRequestId.current !== requestId) return;
       await onServiceChanged(`Removed service group ${group.name}.`);
     } catch (caught) {
       if (groupActionRequestId.current === requestId) {
