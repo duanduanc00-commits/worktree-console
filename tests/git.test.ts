@@ -1,8 +1,14 @@
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+
 import { describe, expect, it } from "vitest";
 
 import {
   buildRecentCommitArgs,
   buildSyntheticUntrackedDiff,
+  handleBufferedDiffError,
+  readBoundedRegularFileDiff,
   buildWorktreeDiffArgs,
   limitDiffLines,
   parseBranchStatus,
@@ -166,5 +172,72 @@ describe("buildSyntheticUntrackedDiff", () => {
         "+Unsupported untracked directory; contents were not read."
       ].join("\n")
     );
+  });
+});
+
+describe("readBoundedRegularFileDiff", () => {
+  it("reads only enough regular file lines to return a bounded synthetic diff", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "worktree-console-diff-"));
+    try {
+      const filePath = join(tempDir, "large.txt");
+      await writeFile(filePath, ["line 1", "line 2", "line 3", "line 4", "line 5"].join("\n"));
+
+      const result = await readBoundedRegularFileDiff("large.txt", filePath, 7);
+
+      expect(result).toEqual({
+        diff: [
+          "diff --git a/large.txt b/large.txt",
+          "new file mode 100644",
+          "--- /dev/null",
+          "+++ b/large.txt",
+          "+line 1",
+          "+line 2",
+          "+line 3"
+        ].join("\n"),
+        truncated: true,
+        lineCount: 8
+      });
+      expect(result.diff).not.toContain("line 4");
+      expect(result.diff).not.toContain("line 5");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("handleBufferedDiffError", () => {
+  it("returns bounded partial stdout when git diff exceeds maxBuffer", () => {
+    expect(
+      handleBufferedDiffError(
+        {
+          code: "ERR_CHILD_PROCESS_STDIO_MAXBUFFER",
+          stdout: "one\ntwo\nthree"
+        },
+        2
+      )
+    ).toEqual({
+      diff: "one\ntwo",
+      truncated: true,
+      lineCount: 3
+    });
+  });
+
+  it("returns a truncated explanatory message when overflow has no stdout", () => {
+    expect(
+      handleBufferedDiffError(
+        {
+          message: "stdout maxBuffer length exceeded"
+        },
+        200
+      )
+    ).toEqual({
+      diff: "Diff output exceeded the server buffer before any partial output was captured.",
+      truncated: true,
+      lineCount: 1
+    });
+  });
+
+  it("returns null for ordinary git failures", () => {
+    expect(handleBufferedDiffError({ code: 1, stderr: "fatal: bad revision" }, 200)).toBeNull();
   });
 });

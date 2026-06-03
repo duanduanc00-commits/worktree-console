@@ -1,4 +1,5 @@
-import { access, lstat, readFile, readlink } from "node:fs/promises";
+import { createReadStream } from "node:fs";
+import { access, lstat, readlink } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { execFile } from "node:child_process";
@@ -150,12 +151,18 @@ export async function readWorktreeFileDiff(
   maxLines = 200
 ): Promise<{ diff: string; truncated: boolean; lineCount: number }> {
   if (isUntrackedChange(change)) {
-    return limitDiffLines(await buildSyntheticUntrackedDiffFromPath(worktreePath, filePath), maxLines);
+    return buildSyntheticUntrackedDiffFromPath(worktreePath, filePath, maxLines);
   }
 
   const args = isStagedChange(change) ? buildCachedWorktreeDiffArgs(filePath) : buildWorktreeDiffArgs(filePath);
-  const { stdout } = await git(worktreePath, args);
-  return limitDiffLines(stdout, maxLines);
+  try {
+    const { stdout } = await git(worktreePath, args);
+    return limitDiffLines(stdout, maxLines);
+  } catch (error) {
+    const overflow = handleBufferedDiffError(error, maxLines);
+    if (overflow) return overflow;
+    throw error;
+  }
 }
 
 export async function readShortHead(path: string): Promise<string | null> {
@@ -271,28 +278,83 @@ export function buildSyntheticUntrackedDiff(filePath: string, input: SyntheticUn
   return buildAddedDiffHeader(filePath, "100644").concat(lines.map((line) => `+${line}`)).join("\n");
 }
 
-async function buildSyntheticUntrackedDiffFromPath(worktreePath: string, filePath: string): Promise<string> {
+export async function readBoundedRegularFileDiff(
+  filePath: string,
+  absolutePath: string,
+  maxLines: number
+): Promise<{ diff: string; truncated: boolean; lineCount: number }> {
+  const header = buildAddedDiffHeader(filePath, "100644");
+  const contentLineLimit = Math.max(0, maxLines - header.length);
+  if (contentLineLimit === 0) {
+    return {
+      diff: header.slice(0, maxLines).join("\n"),
+      truncated: true,
+      lineCount: header.length + 1
+    };
+  }
+
+  const content = await readBoundedTextLines(absolutePath, contentLineLimit);
+  const lines = header.concat(content.lines.map((line) => `+${line}`));
+
+  return {
+    diff: lines.slice(0, maxLines).join("\n"),
+    truncated: content.truncated,
+    lineCount: content.truncated ? maxLines + 1 : lines.length
+  };
+}
+
+export function handleBufferedDiffError(
+  error: unknown,
+  maxLines: number
+): { diff: string; truncated: boolean; lineCount: number } | null {
+  if (!isMaxBufferError(error)) {
+    return null;
+  }
+
+  const stdout = typeof (error as { stdout?: unknown }).stdout === "string" ? (error as { stdout: string }).stdout : "";
+  if (stdout) {
+    return {
+      ...limitDiffLines(stdout, maxLines),
+      truncated: true
+    };
+  }
+
+  return {
+    diff: "Diff output exceeded the server buffer before any partial output was captured.",
+    truncated: true,
+    lineCount: 1
+  };
+}
+
+async function buildSyntheticUntrackedDiffFromPath(
+  worktreePath: string,
+  filePath: string,
+  maxLines: number
+): Promise<{ diff: string; truncated: boolean; lineCount: number }> {
   const path = join(worktreePath, filePath);
   const stats = await lstat(path);
 
   if (stats.isSymbolicLink()) {
-    return buildSyntheticUntrackedDiff(filePath, {
-      kind: "symlink",
-      linkTarget: await readlink(path)
-    });
+    return limitDiffLines(
+      buildSyntheticUntrackedDiff(filePath, {
+        kind: "symlink",
+        linkTarget: await readlink(path)
+      }),
+      maxLines
+    );
   }
 
   if (stats.isFile()) {
-    return buildSyntheticUntrackedDiff(filePath, {
-      kind: "file",
-      content: await readFile(path, "utf8")
-    });
+    return readBoundedRegularFileDiff(filePath, path, maxLines);
   }
 
-  return buildSyntheticUntrackedDiff(filePath, {
-    kind: "unsupported",
-    description: stats.isDirectory() ? "directory" : "file type"
-  });
+  return limitDiffLines(
+    buildSyntheticUntrackedDiff(filePath, {
+      kind: "unsupported",
+      description: stats.isDirectory() ? "directory" : "file type"
+    }),
+    maxLines
+  );
 }
 
 function buildOneLineAddedDiff(filePath: string, mode: string, line: string): string {
@@ -309,6 +371,45 @@ function isStagedChange(change?: WorktreeChange): boolean {
 
 function isUntrackedChange(change?: WorktreeChange): boolean {
   return change?.raw.slice(0, 2) === "??" || change?.code === "??";
+}
+
+async function readBoundedTextLines(
+  path: string,
+  maxLines: number
+): Promise<{ lines: string[]; truncated: boolean }> {
+  const stream = createReadStream(path, { encoding: "utf8", highWaterMark: 64 * 1024 });
+  let text = "";
+
+  for await (const chunk of stream) {
+    text += chunk;
+    const lines = splitTextLines(text);
+    if (lines.length > maxLines) {
+      stream.destroy();
+      return {
+        lines: lines.slice(0, maxLines),
+        truncated: true
+      };
+    }
+  }
+
+  return {
+    lines: splitTextLines(text),
+    truncated: false
+  };
+}
+
+function splitTextLines(text: string): string[] {
+  const lines = text.replace(/\r\n/g, "\n").split("\n");
+  if (text.endsWith("\n")) {
+    lines.pop();
+  }
+  return text ? lines : [];
+}
+
+function isMaxBufferError(error: unknown): boolean {
+  const candidate = error as { code?: unknown; message?: unknown };
+  return candidate.code === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER" ||
+    (typeof candidate.message === "string" && candidate.message.includes("maxBuffer"));
 }
 
 async function git(cwd: string, args: string[]) {
