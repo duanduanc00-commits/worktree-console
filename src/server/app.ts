@@ -317,7 +317,12 @@ export function createApp({
         return;
       }
 
-      const project = await findProject(registry, request.params.id);
+      const project = (await registry.listProjects()).find((candidate) => candidate.id === request.params.id);
+      if (!project) {
+        response.status(404).json({ error: "Project not found." });
+        return;
+      }
+
       const snapshot = await snapshotProject(project, serviceManager);
       const worktree = snapshot.worktrees.find((candidate) => samePath(candidate.path, worktreePath));
       if (!worktree) {

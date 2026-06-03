@@ -215,6 +215,20 @@ describe("createApp", () => {
       .expect(400);
   });
 
+  it("returns 404 when the worktree diff project is unknown", async () => {
+    const app = createApp({
+      activityLog: new ActivityLog(join(tempDir, "activity.json")),
+      registry: new ProjectRegistry(join(tempDir, "projects.json"))
+    });
+
+    const response = await request(app)
+      .get("/api/projects/missing-project/worktrees/diff")
+      .query({ path: join(tempDir, "repo"), file: "README.md" })
+      .expect(404);
+
+    expect(response.body).toEqual({ error: "Project not found." });
+  });
+
   it("returns 404 when the requested worktree is unknown", async () => {
     const repoPath = join(tempDir, "repo");
     await createGitRepo(repoPath);
