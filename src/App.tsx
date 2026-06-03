@@ -1284,6 +1284,7 @@ function ServicePanel({
 }) {
   const [busyServiceId, setBusyServiceId] = useState<string | null>(null);
   const groupBusyRef = useRef(false);
+  const groupActionRequestId = useRef(0);
   const keepGroupErrorsForNextSnapshot = useRef(false);
   const [groupBusy, setGroupBusy] = useState<{ id: string; action: ServiceGroupAction | "delete" } | null>(null);
   const [groupDialogOpen, setGroupDialogOpen] = useState(false);
@@ -1294,6 +1295,7 @@ function ServicePanel({
   const serviceGroups = project.serviceGroups ?? [];
 
   useEffect(() => {
+    groupActionRequestId.current += 1;
     groupBusyRef.current = false;
     keepGroupErrorsForNextSnapshot.current = false;
     setGroupBusy(null);
@@ -1333,6 +1335,8 @@ function ServicePanel({
   async function runGroupAction(group: ServiceGroupSnapshot, actionName: ServiceGroupAction) {
     if (groupBusyRef.current) return;
 
+    const requestId = groupActionRequestId.current + 1;
+    groupActionRequestId.current = requestId;
     groupBusyRef.current = true;
     setGroupBusy({ id: group.id, action: actionName });
     setGroupErrors((current) => {
@@ -1348,16 +1352,20 @@ function ServicePanel({
             ? await stopServiceGroup(project.id, group.id)
             : await restartServiceGroup(project.id, group.id);
       const errorSummary = serviceGroupActionErrorSummary(response);
-      if (errorSummary) {
+      if (errorSummary && groupActionRequestId.current === requestId) {
         keepGroupErrorsForNextSnapshot.current = true;
         setGroupErrors((current) => ({ ...current, [group.id]: errorSummary }));
       }
       await onServiceChanged(serviceGroupActionNotice(response));
     } catch (caught) {
-      setGroupErrors((current) => ({ ...current, [group.id]: (caught as Error).message }));
+      if (groupActionRequestId.current === requestId) {
+        setGroupErrors((current) => ({ ...current, [group.id]: (caught as Error).message }));
+      }
     } finally {
-      groupBusyRef.current = false;
-      setGroupBusy(null);
+      if (groupActionRequestId.current === requestId) {
+        groupBusyRef.current = false;
+        setGroupBusy(null);
+      }
     }
   }
 
@@ -1368,6 +1376,8 @@ function ServicePanel({
     if (!confirmed) return;
     if (groupBusyRef.current) return;
 
+    const requestId = groupActionRequestId.current + 1;
+    groupActionRequestId.current = requestId;
     groupBusyRef.current = true;
     setGroupBusy({ id: group.id, action: "delete" });
     setGroupErrors((current) => {
@@ -1379,10 +1389,14 @@ function ServicePanel({
       await removeServiceGroup(project.id, group.id);
       await onServiceChanged(`Removed service group ${group.name}.`);
     } catch (caught) {
-      setGroupErrors((current) => ({ ...current, [group.id]: (caught as Error).message }));
+      if (groupActionRequestId.current === requestId) {
+        setGroupErrors((current) => ({ ...current, [group.id]: (caught as Error).message }));
+      }
     } finally {
-      groupBusyRef.current = false;
-      setGroupBusy(null);
+      if (groupActionRequestId.current === requestId) {
+        groupBusyRef.current = false;
+        setGroupBusy(null);
+      }
     }
   }
 
