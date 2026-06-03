@@ -109,9 +109,49 @@ export type DashboardSummary = {
   clean: number;
 };
 
+export type HealthIssueKind =
+  | "missing-project"
+  | "dirty-project"
+  | "dirty-worktree"
+  | "cleanup-candidate"
+  | "stopped-service"
+  | "occupied-port";
+
+export type HealthIssueSeverity = "info" | "warning" | "critical";
+
+export type HealthIssue = {
+  id: string;
+  kind: HealthIssueKind;
+  severity: HealthIssueSeverity;
+  title: string;
+  detail: string;
+  projectId: string;
+  projectName: string;
+  projectPath: string;
+  targetType?: "project" | "worktree" | "branch" | "service" | "port";
+  target?: string;
+  actionLabel?: string;
+};
+
+export type HealthSummary = {
+  counts: {
+    critical: number;
+    warning: number;
+    info: number;
+    dirtyProjects: number;
+    dirtyWorktrees: number;
+    cleanupCandidates: number;
+    stoppedServices: number;
+    occupiedPorts: number;
+    missingProjects: number;
+  };
+  issues: HealthIssue[];
+};
+
 export type DashboardResponse = {
   projects: ProjectSnapshot[];
   summary: DashboardSummary;
+  health: HealthSummary;
 };
 
 export type ActivityTargetType = "project" | "worktree" | "branch" | "service";
