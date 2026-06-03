@@ -1,5 +1,6 @@
 import { FormEvent, useEffect, useMemo, useState, type CSSProperties, type PointerEvent, type ReactNode } from "react";
 import {
+  Activity,
   Copy,
   ExternalLink,
   FolderOpen,
@@ -47,10 +48,12 @@ import {
   serviceStatusTone,
   serviceUrl
 } from "./lib/service-ui";
+import { healthIssueLabel, healthIssueTone } from "./lib/health-ui";
 import type {
   ActivityEvent,
   BranchInfo,
   DashboardResponse,
+  HealthIssue,
   ProjectSnapshot,
   RecentCommit,
   RemovalAssessment,
@@ -64,7 +67,7 @@ import { Input } from "./components/ui/input";
 import { SegmentedControl, SegmentButton } from "./components/ui/tabs";
 
 type StatusFilter = "all" | "clean" | "dirty" | "missing";
-type SidebarView = "projects" | "worktrees" | "registry" | "activity";
+type SidebarView = "health" | "projects" | "worktrees" | "registry" | "activity";
 type InspectorTab = "trees" | "branches" | "commits" | "services";
 type CommitRange = "24h" | "7d" | "30d" | "all";
 
@@ -193,8 +196,17 @@ export function App() {
   function handleViewChange(nextView: SidebarView) {
     setView(nextView);
     setTagFilter(null);
-    if (nextView === "worktrees" || nextView === "activity") {
+    if (nextView === "worktrees" || nextView === "activity" || nextView === "health") {
       setFilter("all");
+    }
+  }
+
+  function handleInspectHealthIssue(issue: HealthIssue) {
+    setSelectedId(issue.projectId);
+    if (issue.kind === "stopped-service" || issue.kind === "occupied-port") {
+      setInspectorTab("services");
+    } else {
+      setInspectorTab("trees");
     }
   }
 
@@ -268,7 +280,7 @@ export function App() {
             ) : null}
           </div>
 
-          {view !== "activity" ? (
+          {view !== "activity" && view !== "health" ? (
             <div className="toolbar-row">
               <label className="search-field">
                 <Search size={15} />
@@ -303,6 +315,12 @@ export function App() {
               events={activityEvents}
               loading={activityLoading}
               onRefresh={() => void refreshActivity()}
+            />
+          ) : view === "health" ? (
+            <HealthPanel
+              dashboard={dashboard}
+              loading={loading}
+              onInspectIssue={handleInspectHealthIssue}
             />
           ) : (
             <>
@@ -469,6 +487,10 @@ function Sidebar({
   return (
     <aside className="sidebar">
       <p className="side-label">Library</p>
+      <button className={`source ${view === "health" ? "active" : ""}`} onClick={() => onViewChange("health")}>
+        <Activity size={15} />
+        Health
+      </button>
       <button className={`source ${view === "projects" ? "active" : ""}`} onClick={() => onViewChange("projects")}>
         <LayoutDashboard size={15} />
         All Projects
@@ -593,6 +615,58 @@ function ActivityPanel({
               <time className="activity-time" dateTime={event.createdAt} title={formatActivityFullTime(event.createdAt)}>
                 {formatActivityTime(event.createdAt)}
               </time>
+            </article>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function HealthPanel({
+  dashboard,
+  loading,
+  onInspectIssue
+}: {
+  dashboard: DashboardResponse;
+  loading: boolean;
+  onInspectIssue: (issue: HealthIssue) => void;
+}) {
+  const { counts, issues } = dashboard.health;
+
+  return (
+    <section className="health-panel" aria-label="Project health">
+      <section className="health-metrics" aria-label="Health summary">
+        <Metric label="Critical" value={counts.critical} />
+        <Metric label="Warnings" value={counts.warning} />
+        <Metric label="Cleanup" value={counts.cleanupCandidates} />
+        <Metric label="Stopped" value={counts.stoppedServices} />
+      </section>
+
+      {loading ? (
+        <div className="empty-state compact">Refreshing project health...</div>
+      ) : issues.length === 0 ? (
+        <div className="empty-state compact">All registered projects look healthy.</div>
+      ) : (
+        <div className="health-list">
+          {issues.map((issue) => (
+            <article className="health-row" key={issue.id}>
+              <div className="health-main">
+                <div className="health-title">
+                  <strong>{issue.title}</strong>
+                  <Badge tone={healthIssueTone(issue.severity)}>{healthIssueLabel(issue.kind)}</Badge>
+                </div>
+                <div className="health-meta">
+                  <span>{issue.projectName}</span>
+                  <span aria-hidden="true">/</span>
+                  <span>{healthTargetLabel(issue, dashboard.projects)}</span>
+                </div>
+                <div className="health-detail">{issue.detail}</div>
+              </div>
+              <div className="health-actions">
+                <Badge tone={healthIssueTone(issue.severity)}>{severityLabel(issue.severity)}</Badge>
+                <Button onClick={() => onInspectIssue(issue)}>{issue.actionLabel ?? "Inspect"}</Button>
+              </div>
             </article>
           ))}
         </div>
@@ -1531,6 +1605,7 @@ function labelStatus(status: ProjectSnapshot["status"] | StatusFilter) {
 
 function viewTitle(view: SidebarView, tagFilter: string | null) {
   if (tagFilter) return tagFilter;
+  if (view === "health") return "Health";
   if (view === "activity") return "Activity";
   if (view === "worktrees") return "Worktrees";
   if (view === "registry") return "Registry";
@@ -1538,10 +1613,28 @@ function viewTitle(view: SidebarView, tagFilter: string | null) {
 }
 
 function viewSubtitle(view: SidebarView) {
+  if (view === "health") return "Actionable local project health across worktrees, services, and cleanup.";
   if (view === "activity") return "Recent operations performed through this console.";
   if (view === "worktrees") return "Registered repositories grouped by local worktree activity.";
   if (view === "registry") return "Manage registered repositories and remove entries you no longer track.";
   return "Registered repositories, local branches, and worktree activity.";
+}
+
+function severityLabel(severity: HealthIssue["severity"]) {
+  if (severity === "critical") return "Critical";
+  if (severity === "warning") return "Warning";
+  return "Info";
+}
+
+function healthTargetLabel(issue: HealthIssue, projects: ProjectSnapshot[]) {
+  const project = projects.find((candidate) => candidate.id === issue.projectId);
+
+  if (issue.targetType === "service" && issue.target) {
+    return project?.services.find((service) => service.id === issue.target)?.name ?? issue.target;
+  }
+
+  if (issue.targetType === "project") return issue.projectPath;
+  return issue.target ?? issue.projectPath;
 }
 
 function activityActionLabel(actionName: string) {

@@ -620,6 +620,91 @@ h1 {
   white-space: nowrap;
 }
 
+.health-panel {
+  display: grid;
+  gap: 12px;
+}
+
+.health-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(112px, 1fr));
+  gap: 10px;
+}
+
+.health-list {
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--surface-strong);
+}
+
+.health-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  min-height: 72px;
+  border-bottom: 1px solid var(--border);
+  padding: 11px 12px;
+  gap: 14px;
+}
+
+.health-row:last-child {
+  border-bottom: 0;
+}
+
+.health-main {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+}
+
+.health-title {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 8px;
+}
+
+.health-title strong {
+  overflow: hidden;
+  min-width: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.health-meta {
+  display: flex;
+  min-width: 0;
+  color: var(--muted);
+  gap: 6px;
+}
+
+.health-meta span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.health-meta span:last-child {
+  direction: rtl;
+  text-align: left;
+}
+
+.health-detail {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.health-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 7px;
+}
+
 .project-list {
   overflow: hidden;
   border: 1px solid var(--border);
@@ -1372,8 +1457,17 @@ h1 {
   }
 
   .toolbar-row,
-  .stats {
+  .stats,
+  .health-metrics {
     grid-template-columns: 1fr;
+  }
+
+  .health-row {
+    grid-template-columns: 1fr;
+  }
+
+  .health-actions {
+    justify-content: flex-start;
   }
 
   .status-strip {
