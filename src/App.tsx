@@ -953,6 +953,7 @@ function WorktreeChanges({
   const [copiedPath, setCopiedPath] = useState<string | null>(null);
   const [copyError, setCopyError] = useState<string | null>(null);
   const diffRequestId = useRef(0);
+  const copyRequestId = useRef(0);
   const copyFeedbackTimer = useRef<number | null>(null);
   const changePathsKey = changes.map((change) => change.path).join("\u0000");
 
@@ -961,6 +962,7 @@ function WorktreeChanges({
 
     return () => {
       diffRequestId.current += 1;
+      copyRequestId.current += 1;
       clearCopyFeedbackTimer();
     };
   }, [projectId, worktree.path]);
@@ -978,6 +980,7 @@ function WorktreeChanges({
 
   function resetDiffState() {
     diffRequestId.current += 1;
+    copyRequestId.current += 1;
     clearCopyFeedbackTimer();
     setSelectedFile(null);
     setDiff(null);
@@ -990,6 +993,7 @@ function WorktreeChanges({
   async function loadDiff(filePath: string) {
     const requestId = diffRequestId.current + 1;
     diffRequestId.current = requestId;
+    copyRequestId.current += 1;
     clearCopyFeedbackTimer();
     setSelectedFile(filePath);
     setDiff(null);
@@ -1015,6 +1019,9 @@ function WorktreeChanges({
   async function copySelectedPath() {
     if (!selectedFile) return;
 
+    const filePath = selectedFile;
+    const requestId = copyRequestId.current + 1;
+    copyRequestId.current = requestId;
     clearCopyFeedbackTimer();
     setCopiedPath(null);
     setCopyError(null);
@@ -1025,13 +1032,16 @@ function WorktreeChanges({
     }
 
     try {
-      await navigator.clipboard.writeText(selectedFile);
-      setCopiedPath(selectedFile);
+      await navigator.clipboard.writeText(filePath);
+      if (copyRequestId.current !== requestId) return;
+      setCopiedPath(filePath);
       copyFeedbackTimer.current = window.setTimeout(() => {
-        setCopiedPath((current) => (current === selectedFile ? null : current));
+        if (copyRequestId.current !== requestId) return;
+        setCopiedPath((current) => (current === filePath ? null : current));
         copyFeedbackTimer.current = null;
       }, 1600);
     } catch (caught) {
+      if (copyRequestId.current !== requestId) return;
       setCopyError((caught as Error).message || "Could not copy path.");
     }
   }
