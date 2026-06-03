@@ -109,8 +109,8 @@ describe("buildHealthSummary", () => {
 
     expect(summary.issues.map((issue) => issue.kind)).toEqual([
       "dirty-worktree",
-      "cleanup-candidate",
-      "stopped-service"
+      "stopped-service",
+      "cleanup-candidate"
     ]);
     expect(summary.issues).toEqual(
       expect.arrayContaining([

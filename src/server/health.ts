@@ -100,6 +100,24 @@ export function buildHealthSummary(projects: ProjectSnapshot[]): HealthSummary {
   }
 
   for (const project of projects) {
+    for (const service of project.services) {
+      if (service.status === "stopped") {
+        issues.push(
+          issue({
+            kind: "stopped-service",
+            severity: "warning",
+            title: `${service.name} is stopped`,
+            detail: "The service is not currently running.",
+            project,
+            targetType: "service",
+            target: service.id
+          })
+        );
+      }
+    }
+  }
+
+  for (const project of projects) {
     for (const worktree of project.worktrees) {
       const matchingBranch = project.branches.find((branch) => branch.name === worktree.branch);
 
@@ -113,24 +131,6 @@ export function buildHealthSummary(projects: ProjectSnapshot[]): HealthSummary {
             project,
             targetType: "worktree",
             target: worktree.path
-          })
-        );
-      }
-    }
-  }
-
-  for (const project of projects) {
-    for (const service of project.services) {
-      if (service.status === "stopped") {
-        issues.push(
-          issue({
-            kind: "stopped-service",
-            severity: "warning",
-            title: `${service.name} is stopped`,
-            detail: "The service is not currently running.",
-            project,
-            targetType: "service",
-            target: service.id
           })
         );
       }
