@@ -183,10 +183,14 @@ export async function readWorktreeFileDiff(
     return buildSyntheticUntrackedDiffFromPath(worktreePath, filePath, maxLines);
   }
 
-  const args = isStagedChange(change) ? buildCachedWorktreeDiffArgs(filePath) : buildWorktreeDiffArgs(filePath);
   try {
-    const { stdout } = await git(worktreePath, args);
-    return limitDiffLines(stdout, maxLines);
+    const diffOutputs = await Promise.all(
+      buildTrackedWorktreeDiffArgs(filePath, change).map(async (args) => {
+        const { stdout } = await git(worktreePath, args);
+        return stdout;
+      })
+    );
+    return limitDiffLines(diffOutputs.filter(Boolean).join("\n"), maxLines);
   } catch (error) {
     const overflow = handleBufferedDiffError(error, maxLines);
     if (overflow) return overflow;
@@ -284,6 +288,16 @@ function sinceForRange(range: RecentCommitRange): string | null {
 
 function buildCachedWorktreeDiffArgs(filePath: string): string[] {
   return ["diff", "--cached", ...safeDiffArgs, "--", filePath];
+}
+
+function buildTrackedWorktreeDiffArgs(filePath: string, change?: WorktreeChange): string[][] {
+  if (hasStagedChange(change) && hasUnstagedChange(change)) {
+    return [buildCachedWorktreeDiffArgs(filePath), buildWorktreeDiffArgs(filePath)];
+  }
+  if (hasStagedChange(change)) {
+    return [buildCachedWorktreeDiffArgs(filePath)];
+  }
+  return [buildWorktreeDiffArgs(filePath)];
 }
 
 export function buildSyntheticUntrackedDiff(filePath: string, input: SyntheticUntrackedDiffInput): string {
@@ -404,8 +418,12 @@ function buildAddedDiffHeader(filePath: string, mode: string): string[] {
   return [`diff --git a/${filePath} b/${filePath}`, `new file mode ${mode}`, "--- /dev/null", `+++ b/${filePath}`];
 }
 
-function isStagedChange(change?: WorktreeChange): boolean {
+function hasStagedChange(change?: WorktreeChange): boolean {
   return Boolean(change && change.raw.slice(0, 1) !== " " && !isUntrackedChange(change));
+}
+
+function hasUnstagedChange(change?: WorktreeChange): boolean {
+  return Boolean(change && change.raw.slice(1, 2) !== " " && !isUntrackedChange(change));
 }
 
 function isUntrackedChange(change?: WorktreeChange): boolean {

@@ -308,6 +308,32 @@ describe("createApp", () => {
     expect(response.body.truncated).toBe(false);
   });
 
+  it("returns both staged and unstaged diff content for mixed changed files", async () => {
+    const repoPath = join(tempDir, "repo");
+    await createGitRepo(repoPath);
+    await writeFileText(repoPath, "README.md", "base\n");
+    await git(repoPath, ["add", "README.md"]);
+    await git(repoPath, ["commit", "-m", "Set base readme"]);
+    await writeFileText(repoPath, "README.md", "staged\n");
+    await git(repoPath, ["add", "README.md"]);
+    await writeFileText(repoPath, "README.md", "unstaged\n");
+
+    const registry = new ProjectRegistry(join(tempDir, "projects.json"));
+    const app = createApp({
+      activityLog: new ActivityLog(join(tempDir, "activity.json")),
+      registry
+    });
+    const project = await registry.addProject({ name: "Repo", path: repoPath, tags: [] });
+
+    const response = await request(app)
+      .get(`/api/projects/${project.id}/worktrees/diff`)
+      .query({ path: repoPath, file: "README.md" })
+      .expect(200);
+
+    expect(response.body.diff).toContain("+staged");
+    expect(response.body.diff).toContain("+unstaged");
+  });
+
   it("returns a synthetic added-file diff for untracked files", async () => {
     const repoPath = join(tempDir, "repo");
     await createGitRepo(repoPath);
@@ -358,6 +384,31 @@ describe("createApp", () => {
     expect(response.body.diff).toContain("diff --git");
     expect(response.body.diff).toContain("+line 4");
   });
+
+  it("returns a diff for changed files with leading and trailing spaces in the path", async () => {
+    const repoPath = join(tempDir, "repo");
+    await createGitRepo(repoPath);
+    const spacedPath = " spaced file.txt";
+    await writeLines(repoPath, spacedPath, 2);
+    await git(repoPath, ["add", spacedPath]);
+    await git(repoPath, ["commit", "-m", "Add spaced file"]);
+    await writeLines(repoPath, spacedPath, 4);
+
+    const registry = new ProjectRegistry(join(tempDir, "projects.json"));
+    const app = createApp({
+      activityLog: new ActivityLog(join(tempDir, "activity.json")),
+      registry
+    });
+    const project = await registry.addProject({ name: "Repo", path: repoPath, tags: [] });
+
+    const response = await request(app)
+      .get(`/api/projects/${project.id}/worktrees/diff`)
+      .query({ path: repoPath, file: spacedPath })
+      .expect(200);
+
+    expect(response.body.filePath).toBe(spacedPath);
+    expect(response.body.diff).toContain("+line 4");
+  });
 });
 
 async function createGitRepo(repoPath: string): Promise<void> {
@@ -370,13 +421,18 @@ async function createGitRepo(repoPath: string): Promise<void> {
 }
 
 async function writeLines(repoPath: string, filePath: string, count: number): Promise<void> {
+  await writeFileText(
+    repoPath,
+    filePath,
+    Array.from({ length: count }, (_value, index) => `line ${index + 1}`).join("\n") + "\n"
+  );
+}
+
+async function writeFileText(repoPath: string, filePath: string, content: string): Promise<void> {
   const { mkdir, writeFile } = await import("node:fs/promises");
   const directory = join(repoPath, filePath.split("/").slice(0, -1).join("/"));
   await mkdir(directory, { recursive: true });
-  await writeFile(
-    join(repoPath, filePath),
-    Array.from({ length: count }, (_value, index) => `line ${index + 1}`).join("\n") + "\n"
-  );
+  await writeFile(join(repoPath, filePath), content);
 }
 
 async function git(cwd: string, args: string[]) {

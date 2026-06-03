@@ -310,9 +310,9 @@ export function createApp({
 
   app.get("/api/projects/:id/worktrees/diff", async (request, response, next) => {
     try {
-      const worktreePath = String(request.query.path ?? "").trim();
-      const filePath = String(request.query.file ?? "").trim();
-      if (!worktreePath || !filePath) {
+      const worktreePath = request.query.path;
+      const filePath = request.query.file;
+      if (typeof worktreePath !== "string" || typeof filePath !== "string" || !worktreePath || !filePath) {
         response.status(400).json({ error: "Worktree path and file are required." });
         return;
       }
