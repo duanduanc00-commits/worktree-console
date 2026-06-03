@@ -500,6 +500,7 @@ export async function snapshotProject(
         ...(tracking
           ? {
               upstream: tracking.upstream,
+              upstreamGone: tracking.upstreamGone,
               ahead: tracking.ahead,
               behind: tracking.behind
             }

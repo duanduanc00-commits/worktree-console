@@ -50,25 +50,45 @@ describe("parseBranchStatus", () => {
 describe("parseBranchTrackingRefs", () => {
   it("parses branch upstream and ahead/behind tracking details", () => {
     const output = [
-      "main||",
-      "feature/ahead|origin/feature/ahead|[ahead 2]",
-      "feature/behind|origin/feature/behind|[behind 3]",
-      "feature/diverged|origin/feature/diverged|[ahead 2, behind 3]",
-      "team/alice/feature-demo|origin/team/alice/feature-demo|[ahead 1]"
-    ].join("\n");
+      "main",
+      "",
+      "",
+      "\nfeature/ahead",
+      "origin/feature/ahead",
+      "[ahead 2]",
+      "\nfeature/behind",
+      "origin/feature/behind",
+      "[behind 3]",
+      "\nfeature/diverged",
+      "origin/feature/diverged",
+      "[ahead 2, behind 3]",
+      "\nteam/alice/feature-demo",
+      "origin/team/alice/feature-demo",
+      "[ahead 1]",
+      "\nfeature/pipe|name",
+      "origin/feature/pipe|name",
+      "[behind 1]"
+    ].join("\0");
 
     expect(parseBranchTrackingRefs(output)).toEqual([
-      { name: "main", upstream: null, ahead: 0, behind: 0 },
-      { name: "feature/ahead", upstream: "origin/feature/ahead", ahead: 2, behind: 0 },
-      { name: "feature/behind", upstream: "origin/feature/behind", ahead: 0, behind: 3 },
-      { name: "feature/diverged", upstream: "origin/feature/diverged", ahead: 2, behind: 3 },
-      { name: "team/alice/feature-demo", upstream: "origin/team/alice/feature-demo", ahead: 1, behind: 0 }
+      { name: "main", upstream: null, upstreamGone: false, ahead: 0, behind: 0 },
+      { name: "feature/ahead", upstream: "origin/feature/ahead", upstreamGone: false, ahead: 2, behind: 0 },
+      { name: "feature/behind", upstream: "origin/feature/behind", upstreamGone: false, ahead: 0, behind: 3 },
+      { name: "feature/diverged", upstream: "origin/feature/diverged", upstreamGone: false, ahead: 2, behind: 3 },
+      { name: "team/alice/feature-demo", upstream: "origin/team/alice/feature-demo", upstreamGone: false, ahead: 1, behind: 0 },
+      { name: "feature/pipe|name", upstream: "origin/feature/pipe|name", upstreamGone: false, ahead: 0, behind: 1 }
+    ]);
+  });
+
+  it("preserves gone upstream state instead of treating it as synchronized", () => {
+    expect(parseBranchTrackingRefs(["feature/gone", "origin/feature/gone", "[gone]"].join("\0"))).toEqual([
+      { name: "feature/gone", upstream: "origin/feature/gone", upstreamGone: true, ahead: 0, behind: 0 }
     ]);
   });
 
   it("tolerates unexpected tracking text without throwing", () => {
-    expect(parseBranchTrackingRefs("feature/weird|origin/feature/weird|[gone]")).toEqual([
-      { name: "feature/weird", upstream: "origin/feature/weird", ahead: 0, behind: 0 }
+    expect(parseBranchTrackingRefs(["feature/weird", "origin/feature/weird", "[tracking weirdly]"].join("\0"))).toEqual([
+      { name: "feature/weird", upstream: "origin/feature/weird", upstreamGone: false, ahead: 0, behind: 0 }
     ]);
   });
 });

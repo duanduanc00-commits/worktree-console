@@ -1923,6 +1923,9 @@ function branchMetaTooltip(branch: BranchInfo) {
 }
 
 function branchTrackingLabel(branch: BranchInfo) {
+  if (branch.upstreamGone) {
+    return branch.upstream ? `upstream ${branch.upstream} · gone` : "upstream gone";
+  }
   if (!branch.upstream) return null;
 
   const parts = [`upstream ${branch.upstream}`];
@@ -1932,6 +1935,11 @@ function branchTrackingLabel(branch: BranchInfo) {
 }
 
 function branchTrackingTooltip(branch: BranchInfo) {
+  if (branch.upstreamGone) {
+    return branch.upstream
+      ? `Configured upstream ${branch.upstream} no longer exists.`
+      : "The configured upstream no longer exists.";
+  }
   if (!branch.upstream) return "No upstream branch is configured.";
 
   const ahead = branch.ahead ?? 0;

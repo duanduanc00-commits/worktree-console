@@ -21,6 +21,7 @@ export type RecentCommitOptions = {
 export type BranchTrackingInfo = {
   name: string;
   upstream: string | null;
+  upstreamGone: boolean;
   ahead: number;
   behind: number;
 };
@@ -51,22 +52,21 @@ export function parseBranchStatus(output: string): BranchStatus {
 
 export function parseBranchTrackingRefs(output: string): BranchTrackingInfo[] {
   const entries: BranchTrackingInfo[] = [];
+  const fields = output.split("\0").map(stripRecordSeparator);
 
-  for (const rawLine of output.split(/\r?\n/)) {
-    const line = rawLine.trimEnd();
-    if (!line) continue;
-
-    const [name = "", upstreamRaw = "", trackRaw = ""] = line.split("|");
-    const branchName = name.trim();
+  for (let index = 0; index + 2 < fields.length; index += 3) {
+    const branchName = fields[index];
     if (!branchName) continue;
 
-    const upstream = upstreamRaw.trim() || null;
-    const track = trackRaw.trim();
+    const upstream = fields[index + 1] || null;
+    const track = fields[index + 2];
+    const upstreamGone = track === "[gone]";
     entries.push({
       name: branchName,
       upstream,
-      ahead: upstream ? numberFromStatus(track, /ahead\s+(\d+)/) : 0,
-      behind: upstream ? numberFromStatus(track, /behind\s+(\d+)/) : 0
+      upstreamGone,
+      ahead: upstream && !upstreamGone ? numberFromStatus(track, /ahead\s+(\d+)/) : 0,
+      behind: upstream && !upstreamGone ? numberFromStatus(track, /behind\s+(\d+)/) : 0
     });
   }
 
@@ -268,7 +268,7 @@ export async function readBranches(path: string): Promise<string[]> {
 export async function readBranchTracking(path: string): Promise<BranchTrackingInfo[]> {
   const { stdout } = await git(path, [
     "for-each-ref",
-    "--format=%(refname:short)|%(upstream:short)|%(upstream:track)",
+    "--format=%(refname:short)%00%(upstream:short)%00%(upstream:track)%00",
     "refs/heads"
   ]);
   return parseBranchTrackingRefs(stdout);
@@ -512,6 +512,10 @@ function splitTextLines(text: string): string[] {
     lines.pop();
   }
   return text ? lines : [];
+}
+
+function stripRecordSeparator(value: string): string {
+  return value.replace(/^[\r\n]+|[\r\n]+$/g, "");
 }
 
 function isMaxBufferError(error: unknown): boolean {
