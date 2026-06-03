@@ -251,12 +251,11 @@ Implementation rules:
 - No filesystem, no Git calls.
 - Use `ProjectSnapshot[]` already built by `snapshotProject`.
 - Limit issue list to a stable order:
-  1. missing projects
-  2. occupied ports
-  3. dirty projects
-  4. dirty worktrees
-  5. cleanup candidates
-  6. stopped services
+  1. severity first: critical, warning, info
+  2. within each severity: missing projects, occupied ports, dirty projects, dirty worktrees, stopped services, cleanup candidates
+  3. keep project/worktree/service traversal stable within each category
+
+Warning issues should not be buried below info-level cleanup items.
 
 Skeleton:
 
