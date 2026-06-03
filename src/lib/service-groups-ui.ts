@@ -1,4 +1,4 @@
-import type { ServiceGroupStatus } from "../shared/types";
+import type { ServiceGroupAction, ServiceGroupStatus } from "../shared/types";
 
 type BadgeTone = "neutral" | "clean" | "dirty" | "error";
 
@@ -14,4 +14,15 @@ export function serviceGroupStatusTone(status: ServiceGroupStatus): BadgeTone {
   if (status === "partial") return "dirty";
   if (status === "error") return "error";
   return "neutral";
+}
+
+export function serviceGroupActionDisabled(
+  action: ServiceGroupAction,
+  status: ServiceGroupStatus,
+  serviceCount: number
+): boolean {
+  if (serviceCount === 0 || status === "error") return true;
+  if (action === "start") return status === "running";
+  if (action === "stop") return status === "stopped";
+  return status === "stopped";
 }

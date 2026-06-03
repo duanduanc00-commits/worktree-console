@@ -54,7 +54,11 @@ import {
   serviceStatusTone,
   serviceUrl
 } from "./lib/service-ui";
-import { serviceGroupStatusLabel, serviceGroupStatusTone } from "./lib/service-groups-ui";
+import {
+  serviceGroupActionDisabled,
+  serviceGroupStatusLabel,
+  serviceGroupStatusTone
+} from "./lib/service-groups-ui";
 import { healthIssueLabel, healthIssueTone } from "./lib/health-ui";
 import { diffLineTone } from "./lib/diff-ui";
 import type {
@@ -1278,7 +1282,9 @@ function ServicePanel({
   onServiceChanged: (message: string) => Promise<void>;
 }) {
   const [busyServiceId, setBusyServiceId] = useState<string | null>(null);
-  const [busyGroup, setBusyGroup] = useState<{ id: string; action: ServiceGroupAction | "delete" } | null>(null);
+  const groupBusyRef = useRef(false);
+  const keepGroupErrorsForNextSnapshot = useRef(false);
+  const [groupBusyAction, setGroupBusyAction] = useState<ServiceGroupAction | "delete" | null>(null);
   const [groupDialogOpen, setGroupDialogOpen] = useState(false);
   const [groupErrors, setGroupErrors] = useState<Record<string, string>>({});
   const [expandedLogs, setExpandedLogs] = useState<string | null>(null);
@@ -1287,10 +1293,20 @@ function ServicePanel({
   const serviceGroups = project.serviceGroups ?? [];
 
   useEffect(() => {
-    setBusyGroup(null);
+    groupBusyRef.current = false;
+    keepGroupErrorsForNextSnapshot.current = false;
+    setGroupBusyAction(null);
     setGroupDialogOpen(false);
     setGroupErrors({});
   }, [project.id]);
+
+  useEffect(() => {
+    if (keepGroupErrorsForNextSnapshot.current) {
+      keepGroupErrorsForNextSnapshot.current = false;
+      return;
+    }
+    setGroupErrors({});
+  }, [project.serviceGroups]);
 
   async function runServiceAction(service: ServiceSnapshot, actionName: "start" | "stop" | "restart") {
     setBusyServiceId(service.id);
@@ -1314,7 +1330,10 @@ function ServicePanel({
   }
 
   async function runGroupAction(group: ServiceGroupSnapshot, actionName: ServiceGroupAction) {
-    setBusyGroup({ id: group.id, action: actionName });
+    if (groupBusyRef.current) return;
+
+    groupBusyRef.current = true;
+    setGroupBusyAction(actionName);
     setGroupErrors((current) => {
       const next = { ...current };
       delete next[group.id];
@@ -1329,13 +1348,15 @@ function ServicePanel({
             : await restartServiceGroup(project.id, group.id);
       const errorSummary = serviceGroupActionErrorSummary(response);
       if (errorSummary) {
+        keepGroupErrorsForNextSnapshot.current = true;
         setGroupErrors((current) => ({ ...current, [group.id]: errorSummary }));
       }
       await onServiceChanged(serviceGroupActionNotice(response));
     } catch (caught) {
       setGroupErrors((current) => ({ ...current, [group.id]: (caught as Error).message }));
     } finally {
-      setBusyGroup(null);
+      groupBusyRef.current = false;
+      setGroupBusyAction(null);
     }
   }
 
@@ -1344,8 +1365,10 @@ function ServicePanel({
       `Remove service group "${group.name}"? The individual service registrations will remain.`
     );
     if (!confirmed) return;
+    if (groupBusyRef.current) return;
 
-    setBusyGroup({ id: group.id, action: "delete" });
+    groupBusyRef.current = true;
+    setGroupBusyAction("delete");
     setGroupErrors((current) => {
       const next = { ...current };
       delete next[group.id];
@@ -1357,7 +1380,8 @@ function ServicePanel({
     } catch (caught) {
       setGroupErrors((current) => ({ ...current, [group.id]: (caught as Error).message }));
     } finally {
-      setBusyGroup(null);
+      groupBusyRef.current = false;
+      setGroupBusyAction(null);
     }
   }
 
@@ -1404,7 +1428,8 @@ function ServicePanel({
         ) : (
           <div className="service-group-list">
             {serviceGroups.map((group) => {
-              const busy = busyGroup?.id === group.id;
+              const groupBusy = groupBusyAction !== null;
+              const serviceCount = group.services.length;
               const groupError = groupErrors[group.id];
               return (
                 <article className="service-group-card" key={group.id}>
@@ -1435,21 +1460,33 @@ function ServicePanel({
                   </div>
 
                   <div className="service-group-actions">
-                    <Button disabled={busy} title="Start group" onClick={() => void runGroupAction(group, "start")}>
+                    <Button
+                      disabled={groupBusy || serviceGroupActionDisabled("start", group.status, serviceCount)}
+                      title="Start group"
+                      onClick={() => void runGroupAction(group, "start")}
+                    >
                       <Play size={14} />
-                      {busyGroup?.id === group.id && busyGroup.action === "start" ? "Starting..." : "Start Group"}
+                      {groupBusyAction === "start" ? "Starting..." : "Start Group"}
                     </Button>
-                    <Button disabled={busy} title="Stop group" onClick={() => void runGroupAction(group, "stop")}>
+                    <Button
+                      disabled={groupBusy || serviceGroupActionDisabled("stop", group.status, serviceCount)}
+                      title="Stop group"
+                      onClick={() => void runGroupAction(group, "stop")}
+                    >
                       <Square size={13} />
-                      {busyGroup?.id === group.id && busyGroup.action === "stop" ? "Stopping..." : "Stop Group"}
+                      {groupBusyAction === "stop" ? "Stopping..." : "Stop Group"}
                     </Button>
-                    <Button disabled={busy} title="Restart group" onClick={() => void runGroupAction(group, "restart")}>
+                    <Button
+                      disabled={groupBusy || serviceGroupActionDisabled("restart", group.status, serviceCount)}
+                      title="Restart group"
+                      onClick={() => void runGroupAction(group, "restart")}
+                    >
                       <RotateCcw size={14} />
-                      {busyGroup?.id === group.id && busyGroup.action === "restart" ? "Restarting..." : "Restart Group"}
+                      {groupBusyAction === "restart" ? "Restarting..." : "Restart Group"}
                     </Button>
                     <Button
                       aria-label={`Remove service group ${group.name}`}
-                      disabled={busy}
+                      disabled={groupBusy}
                       size="icon"
                       title={`Remove service group ${group.name}`}
                       variant="ghost"
@@ -2123,6 +2160,7 @@ function activityActionLabel(actionName: string) {
 function activityTargetLabel(targetType: ActivityEvent["targetType"]) {
   if (targetType === "branch") return "branch";
   if (targetType === "service") return "service";
+  if (targetType === "service-group") return "service group";
   if (targetType === "worktree") return "worktree";
   return "project";
 }
