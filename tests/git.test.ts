@@ -203,6 +203,24 @@ describe("readBoundedRegularFileDiff", () => {
       await rm(tempDir, { recursive: true, force: true });
     }
   });
+
+  it("truncates long single-line regular file diffs by size", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "worktree-console-diff-"));
+    try {
+      const filePath = join(tempDir, "single-line.txt");
+      await writeFile(filePath, `${"a".repeat(32)}SECRET_AFTER_CAP`);
+
+      const result = await readBoundedRegularFileDiff("single-line.txt", filePath, 20, 16);
+
+      expect(result.truncated).toBe(true);
+      expect(result.lineCount).toBe(5);
+      expect(result.diff).toContain(`+${"a".repeat(16)}`);
+      expect(result.diff).not.toContain("SECRET_AFTER_CAP");
+      expect(result.diff.length).toBeLessThan(200);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("handleBufferedDiffError", () => {

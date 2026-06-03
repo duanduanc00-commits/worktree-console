@@ -9,6 +9,7 @@ import type { BranchStatus, RecentCommit, WorktreeChange, WorktreeInfo } from ".
 const execFileAsync = promisify(execFile);
 const prettyCommitFormat = "--pretty=format:%h%x1f%s%x1f%an%x1f%cr";
 const safeDiffArgs = ["--no-ext-diff", "--no-textconv"];
+const untrackedDiffPreviewChars = 64 * 1024;
 
 export type RecentCommitRange = "24h" | "7d" | "30d" | "all";
 
@@ -281,10 +282,12 @@ export function buildSyntheticUntrackedDiff(filePath: string, input: SyntheticUn
 export async function readBoundedRegularFileDiff(
   filePath: string,
   absolutePath: string,
-  maxLines: number
+  maxLines: number,
+  maxChars = untrackedDiffPreviewChars
 ): Promise<{ diff: string; truncated: boolean; lineCount: number }> {
   const header = buildAddedDiffHeader(filePath, "100644");
   const contentLineLimit = Math.max(0, maxLines - header.length);
+  const contentCharLimit = Math.max(0, maxChars);
   if (contentLineLimit === 0) {
     return {
       diff: header.slice(0, maxLines).join("\n"),
@@ -293,13 +296,21 @@ export async function readBoundedRegularFileDiff(
     };
   }
 
-  const content = await readBoundedTextLines(absolutePath, contentLineLimit);
+  if (contentCharLimit === 0) {
+    return {
+      diff: header.join("\n"),
+      truncated: true,
+      lineCount: header.length + 1
+    };
+  }
+
+  const content = await readBoundedTextLines(absolutePath, contentLineLimit, contentCharLimit);
   const lines = header.concat(content.lines.map((line) => `+${line}`));
 
   return {
     diff: lines.slice(0, maxLines).join("\n"),
     truncated: content.truncated,
-    lineCount: content.truncated ? maxLines + 1 : lines.length
+    lineCount: content.truncatedBy === "line" ? maxLines + 1 : lines.length
   };
 }
 
@@ -375,19 +386,30 @@ function isUntrackedChange(change?: WorktreeChange): boolean {
 
 async function readBoundedTextLines(
   path: string,
-  maxLines: number
-): Promise<{ lines: string[]; truncated: boolean }> {
+  maxLines: number,
+  maxChars: number
+): Promise<{ lines: string[]; truncated: boolean; truncatedBy?: "line" | "size" }> {
   const stream = createReadStream(path, { encoding: "utf8", highWaterMark: 64 * 1024 });
   let text = "";
 
   for await (const chunk of stream) {
     text += chunk;
+    if (text.length > maxChars) {
+      stream.destroy();
+      return {
+        lines: splitTextLines(text.slice(0, maxChars)),
+        truncated: true,
+        truncatedBy: "size"
+      };
+    }
+
     const lines = splitTextLines(text);
     if (lines.length > maxLines) {
       stream.destroy();
       return {
         lines: lines.slice(0, maxLines),
-        truncated: true
+        truncated: true,
+        truncatedBy: "line"
       };
     }
   }
