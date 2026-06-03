@@ -1111,6 +1111,10 @@ h1 {
   font-size: 11px;
 }
 
+.diff-note.error {
+  color: #b42318;
+}
+
 .diff-section .error-banner {
   margin-bottom: 0;
 }

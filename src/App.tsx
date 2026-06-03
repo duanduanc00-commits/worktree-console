@@ -951,29 +951,52 @@ function WorktreeChanges({
   const [diffLoading, setDiffLoading] = useState(false);
   const [diffError, setDiffError] = useState<string | null>(null);
   const [copiedPath, setCopiedPath] = useState<string | null>(null);
+  const [copyError, setCopyError] = useState<string | null>(null);
   const diffRequestId = useRef(0);
+  const copyFeedbackTimer = useRef<number | null>(null);
+  const changePathsKey = changes.map((change) => change.path).join("\u0000");
 
   useEffect(() => {
+    resetDiffState();
+
+    return () => {
+      diffRequestId.current += 1;
+      clearCopyFeedbackTimer();
+    };
+  }, [projectId, worktree.path]);
+
+  useEffect(() => {
+    if (!selectedFile || changes.some((change) => change.path === selectedFile)) return;
+    resetDiffState();
+  }, [changePathsKey, selectedFile]);
+
+  function clearCopyFeedbackTimer() {
+    if (copyFeedbackTimer.current === null) return;
+    window.clearTimeout(copyFeedbackTimer.current);
+    copyFeedbackTimer.current = null;
+  }
+
+  function resetDiffState() {
     diffRequestId.current += 1;
+    clearCopyFeedbackTimer();
     setSelectedFile(null);
     setDiff(null);
     setDiffLoading(false);
     setDiffError(null);
     setCopiedPath(null);
-
-    return () => {
-      diffRequestId.current += 1;
-    };
-  }, [projectId, worktree.path]);
+    setCopyError(null);
+  }
 
   async function loadDiff(filePath: string) {
     const requestId = diffRequestId.current + 1;
     diffRequestId.current = requestId;
+    clearCopyFeedbackTimer();
     setSelectedFile(filePath);
     setDiff(null);
     setDiffLoading(true);
     setDiffError(null);
     setCopiedPath(null);
+    setCopyError(null);
 
     try {
       const nextDiff = await getWorktreeDiff(projectId, worktree.path, filePath);
@@ -991,12 +1014,35 @@ function WorktreeChanges({
 
   async function copySelectedPath() {
     if (!selectedFile) return;
-    await navigator.clipboard.writeText(selectedFile);
-    setCopiedPath(selectedFile);
-    window.setTimeout(() => {
-      setCopiedPath((current) => (current === selectedFile ? null : current));
-    }, 1600);
+
+    clearCopyFeedbackTimer();
+    setCopiedPath(null);
+    setCopyError(null);
+
+    if (!navigator.clipboard?.writeText) {
+      setCopyError("Clipboard is unavailable in this browser.");
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(selectedFile);
+      setCopiedPath(selectedFile);
+      copyFeedbackTimer.current = window.setTimeout(() => {
+        setCopiedPath((current) => (current === selectedFile ? null : current));
+        copyFeedbackTimer.current = null;
+      }, 1600);
+    } catch (caught) {
+      setCopyError((caught as Error).message || "Could not copy path.");
+    }
   }
+
+  function copyStatusLabel() {
+    if (copyError) return copyError;
+    if (diff?.truncated) return `Showing a bounded preview of ${diff.lineCount} diff lines.`;
+    return null;
+  }
+
+  const copyStatus = copyStatusLabel();
 
   return (
     <section className="worktree-detail">
@@ -1034,8 +1080,8 @@ function WorktreeChanges({
               <div className="diff-heading">
                 <div className="diff-file">
                   <strong>{selectedFile}</strong>
-                  {diff?.truncated ? (
-                    <span className="diff-note">Showing a bounded preview of {diff.lineCount} diff lines.</span>
+                  {copyStatus ? (
+                    <span className={`diff-note ${copyError ? "error" : ""}`}>{copyStatus}</span>
                   ) : null}
                 </div>
                 <span className="detail-actions">
