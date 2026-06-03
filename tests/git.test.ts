@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 
-import { buildRecentCommitArgs, parseBranchStatus, parseShortStatusChanges, parseWorktreeList } from "../src/server/git";
+import {
+  buildRecentCommitArgs,
+  buildWorktreeDiffArgs,
+  limitDiffLines,
+  parseBranchStatus,
+  parseShortStatusChanges,
+  parseWorktreeList
+} from "../src/server/git";
 
 describe("parseBranchStatus", () => {
   it("parses the current branch, upstream, ahead/behind counts, and dirty file count", () => {
@@ -90,5 +97,29 @@ describe("buildRecentCommitArgs", () => {
       "-50",
       "--pretty=format:%h%x1f%s%x1f%an%x1f%cr"
     ]);
+  });
+});
+
+describe("buildWorktreeDiffArgs", () => {
+  it("builds bounded file diff args for a worktree-relative path", () => {
+    expect(buildWorktreeDiffArgs("src/App.tsx")).toEqual(["diff", "--", "src/App.tsx"]);
+  });
+});
+
+describe("limitDiffLines", () => {
+  it("returns the full diff when it is within the max line count", () => {
+    expect(limitDiffLines("one\ntwo", 3)).toEqual({
+      diff: "one\ntwo",
+      truncated: false,
+      lineCount: 2
+    });
+  });
+
+  it("returns only the first max lines and reports the original line count when truncated", () => {
+    expect(limitDiffLines("one\ntwo\nthree", 2)).toEqual({
+      diff: "one\ntwo",
+      truncated: true,
+      lineCount: 3
+    });
   });
 });

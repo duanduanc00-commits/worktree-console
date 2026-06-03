@@ -64,6 +64,14 @@ export type WorktreeChange = {
   raw: string;
 };
 
+export type WorktreeDiffResponse = {
+  worktreePath: string;
+  filePath: string;
+  diff: string;
+  truncated: boolean;
+  lineCount: number;
+};
+
 export type RecentCommit = {
   hash: string;
   subject: string;

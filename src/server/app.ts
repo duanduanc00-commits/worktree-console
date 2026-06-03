@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { realpathSync } from "node:fs";
 import { basename, join } from "node:path";
 
 import express from "express";
@@ -13,6 +14,7 @@ import {
   readMergedBranches,
   readRecentCommits,
   readShortHead,
+  readWorktreeFileDiff,
   readWorktreeChanges,
   readWorktrees,
   removeWorktree
@@ -23,7 +25,15 @@ import { assessWorktreeRemoval, buildBranchInfo } from "./safety";
 import { ServiceManager } from "./services";
 import { selectFolder as selectLocalFolder } from "./folderPicker";
 import { buildHealthSummary } from "./health";
-import type { ActivityEvent, DashboardResponse, ProjectSnapshot, RegisteredProject, RegisteredService, ServiceSnapshot } from "../shared/types";
+import type {
+  ActivityEvent,
+  DashboardResponse,
+  ProjectSnapshot,
+  RegisteredProject,
+  RegisteredService,
+  ServiceSnapshot,
+  WorktreeDiffResponse
+} from "../shared/types";
 
 export type AppDependencies = {
   registry: ProjectRegistry;
@@ -293,6 +303,41 @@ export function createApp({
     try {
       await findProjectService(registry, request.params.id, request.params.serviceId);
       response.json({ lines: await serviceManager.logs(request.params.id, request.params.serviceId) });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.get("/api/projects/:id/worktrees/diff", async (request, response, next) => {
+    try {
+      const worktreePath = String(request.query.path ?? "").trim();
+      const filePath = String(request.query.file ?? "").trim();
+      if (!worktreePath || !filePath) {
+        response.status(400).json({ error: "Worktree path and file are required." });
+        return;
+      }
+
+      const project = await findProject(registry, request.params.id);
+      const snapshot = await snapshotProject(project, serviceManager);
+      const worktree = snapshot.worktrees.find((candidate) => samePath(candidate.path, worktreePath));
+      if (!worktree) {
+        response.status(404).json({ error: "Worktree not found." });
+        return;
+      }
+
+      const changedFile = worktree.changes?.some((change) => change.path === filePath);
+      if (!changedFile) {
+        response.status(404).json({ error: "Changed file not found in worktree." });
+        return;
+      }
+
+      const diff = await readWorktreeFileDiff(worktree.path, filePath, 200);
+      const payload: WorktreeDiffResponse = {
+        worktreePath: worktree.path,
+        filePath,
+        ...diff
+      };
+      response.json(payload);
     } catch (error) {
       next(error);
     }
@@ -568,6 +613,13 @@ function openTerminal(path: string) {
 }
 
 function samePath(left: string, right: string) {
-  return left.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase() ===
-    right.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+  return normalizePath(left) === normalizePath(right);
+}
+
+function normalizePath(path: string) {
+  try {
+    return realpathSync.native(path).replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+  } catch {
+    return path.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+  }
 }

@@ -5,7 +5,8 @@ import type {
   RecentCommit,
   RegisteredProject,
   RegisteredService,
-  ServiceSnapshot
+  ServiceSnapshot,
+  WorktreeDiffResponse
 } from "../shared/types";
 
 export type AddProjectPayload = {
@@ -67,6 +68,15 @@ export async function deleteWorktree(projectId: string, path: string): Promise<v
     method: "DELETE",
     body: JSON.stringify({ path })
   });
+}
+
+export async function getWorktreeDiff(
+  projectId: string,
+  worktreePath: string,
+  filePath: string
+): Promise<WorktreeDiffResponse> {
+  const params = new URLSearchParams({ path: worktreePath, file: filePath });
+  return request<WorktreeDiffResponse>(`/api/projects/${projectId}/worktrees/diff?${params.toString()}`);
 }
 
 export async function deleteBranch(projectId: string, branch: string): Promise<void> {

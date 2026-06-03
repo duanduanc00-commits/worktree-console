@@ -1,6 +1,9 @@
 import { mkdtemp, rm } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { realpathSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { promisify } from "node:util";
 
 import request from "supertest";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -10,6 +13,7 @@ import { ActivityLog } from "../src/server/activity";
 import { ProjectRegistry } from "../src/server/registry";
 
 let tempDir: string;
+const execFileAsync = promisify(execFile);
 
 beforeEach(async () => {
   tempDir = await mkdtemp(join(tmpdir(), "worktree-console-api-"));
@@ -188,4 +192,112 @@ describe("createApp", () => {
       path: join(tempDir, "chosen")
     });
   });
+
+  it("rejects worktree diff requests with missing query parameters", async () => {
+    const app = createApp({
+      activityLog: new ActivityLog(join(tempDir, "activity.json")),
+      registry: new ProjectRegistry(join(tempDir, "projects.json"))
+    });
+
+    const projectResponse = await request(app)
+      .post("/api/projects")
+      .send({ name: "Repo", path: join(tempDir, "repo") })
+      .expect(201);
+
+    await request(app).get(`/api/projects/${projectResponse.body.id}/worktrees/diff`).expect(400);
+    await request(app)
+      .get(`/api/projects/${projectResponse.body.id}/worktrees/diff`)
+      .query({ path: join(tempDir, "repo") })
+      .expect(400);
+    await request(app)
+      .get(`/api/projects/${projectResponse.body.id}/worktrees/diff`)
+      .query({ file: "src/App.tsx" })
+      .expect(400);
+  });
+
+  it("returns 404 when the requested worktree is unknown", async () => {
+    const repoPath = join(tempDir, "repo");
+    await createGitRepo(repoPath);
+    const registry = new ProjectRegistry(join(tempDir, "projects.json"));
+    const app = createApp({
+      activityLog: new ActivityLog(join(tempDir, "activity.json")),
+      registry
+    });
+    const project = await registry.addProject({ name: "Repo", path: repoPath, tags: [] });
+
+    await request(app)
+      .get(`/api/projects/${project.id}/worktrees/diff`)
+      .query({ path: join(tempDir, "other"), file: "README.md" })
+      .expect(404);
+  });
+
+  it("returns a bounded changed-file diff and rejects unchanged files", async () => {
+    const repoPath = join(tempDir, "repo");
+    await createGitRepo(repoPath);
+    await git(repoPath, ["checkout", "-b", "feature/diff"]);
+    await git(repoPath, ["commit", "--allow-empty", "-m", "Start feature"]);
+    await writeLines(repoPath, "src/App.tsx", 260);
+    await git(repoPath, ["add", "src/App.tsx"]);
+    await git(repoPath, ["commit", "-m", "Add app"]);
+    await writeLines(repoPath, "src/App.tsx", 520);
+
+    const registry = new ProjectRegistry(join(tempDir, "projects.json"));
+    const app = createApp({
+      activityLog: new ActivityLog(join(tempDir, "activity.json")),
+      registry
+    });
+    const project = await registry.addProject({ name: "Repo", path: repoPath, tags: [] });
+
+    const response = await request(app)
+      .get(`/api/projects/${project.id}/worktrees/diff`)
+      .query({ path: repoPath, file: "src/App.tsx" })
+      .expect(200);
+
+    expect(response.body).toMatchObject({
+      worktreePath: expect.any(String),
+      filePath: "src/App.tsx",
+      truncated: true,
+      lineCount: expect.any(Number)
+    });
+    expect(normalizePath(response.body.worktreePath)).toBe(normalizePath(repoPath));
+    expect(response.body.lineCount).toBeGreaterThan(200);
+    expect(response.body.diff.split(/\r?\n/)).toHaveLength(200);
+    expect(response.body.diff).toContain("diff --git");
+
+    await request(app)
+      .get(`/api/projects/${project.id}/worktrees/diff`)
+      .query({ path: repoPath, file: "README.md" })
+      .expect(404);
+  });
 });
+
+async function createGitRepo(repoPath: string): Promise<void> {
+  await git(tempDir, ["init", repoPath]);
+  await git(repoPath, ["config", "user.email", "test@example.com"]);
+  await git(repoPath, ["config", "user.name", "Test User"]);
+  await writeLines(repoPath, "README.md", 2);
+  await git(repoPath, ["add", "."]);
+  await git(repoPath, ["commit", "-m", "Initial commit"]);
+}
+
+async function writeLines(repoPath: string, filePath: string, count: number): Promise<void> {
+  const { mkdir, writeFile } = await import("node:fs/promises");
+  const directory = join(repoPath, filePath.split("/").slice(0, -1).join("/"));
+  await mkdir(directory, { recursive: true });
+  await writeFile(
+    join(repoPath, filePath),
+    Array.from({ length: count }, (_value, index) => `line ${index + 1}`).join("\n") + "\n"
+  );
+}
+
+async function git(cwd: string, args: string[]) {
+  return execFileAsync("git", args, {
+    cwd,
+    windowsHide: true,
+    timeout: 12000
+  });
+}
+
+function normalizePath(path: string): string {
+  return realpathSync.native(path).replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+}

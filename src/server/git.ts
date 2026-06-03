@@ -114,6 +114,37 @@ export async function readWorktreeChanges(path: string): Promise<WorktreeChange[
   return parseShortStatusChanges(stdout);
 }
 
+export function buildWorktreeDiffArgs(filePath: string): string[] {
+  return ["diff", "--", filePath];
+}
+
+export function limitDiffLines(
+  output: string,
+  maxLines: number
+): { diff: string; truncated: boolean; lineCount: number } {
+  const lines = output.replace(/\r\n/g, "\n").split("\n");
+  if (output.endsWith("\n")) {
+    lines.pop();
+  }
+  const lineCount = output ? lines.length : 0;
+  const truncated = lineCount > maxLines;
+
+  return {
+    diff: truncated ? lines.slice(0, maxLines).join("\n") : output,
+    truncated,
+    lineCount
+  };
+}
+
+export async function readWorktreeFileDiff(
+  worktreePath: string,
+  filePath: string,
+  maxLines = 200
+): Promise<{ diff: string; truncated: boolean; lineCount: number }> {
+  const { stdout } = await git(worktreePath, buildWorktreeDiffArgs(filePath));
+  return limitDiffLines(stdout, maxLines);
+}
+
 export async function readShortHead(path: string): Promise<string | null> {
   try {
     const { stdout } = await git(path, ["rev-parse", "--short", "HEAD"]);
