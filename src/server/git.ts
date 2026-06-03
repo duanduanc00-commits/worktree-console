@@ -18,6 +18,13 @@ export type RecentCommitOptions = {
   range?: RecentCommitRange;
 };
 
+export type BranchTrackingInfo = {
+  name: string;
+  upstream: string | null;
+  ahead: number;
+  behind: number;
+};
+
 export type SyntheticUntrackedDiffInput =
   | { kind: "file"; content: string }
   | { kind: "symlink"; linkTarget: string }
@@ -40,6 +47,30 @@ export function parseBranchStatus(output: string): BranchStatus {
     dirtyFiles: Math.max(0, lines.length - 1),
     clean: lines.length <= 1
   };
+}
+
+export function parseBranchTrackingRefs(output: string): BranchTrackingInfo[] {
+  const entries: BranchTrackingInfo[] = [];
+
+  for (const rawLine of output.split(/\r?\n/)) {
+    const line = rawLine.trimEnd();
+    if (!line) continue;
+
+    const [name = "", upstreamRaw = "", trackRaw = ""] = line.split("|");
+    const branchName = name.trim();
+    if (!branchName) continue;
+
+    const upstream = upstreamRaw.trim() || null;
+    const track = trackRaw.trim();
+    entries.push({
+      name: branchName,
+      upstream,
+      ahead: upstream ? numberFromStatus(track, /ahead\s+(\d+)/) : 0,
+      behind: upstream ? numberFromStatus(track, /behind\s+(\d+)/) : 0
+    });
+  }
+
+  return entries;
 }
 
 export function parseWorktreeList(output: string): WorktreeInfo[] {
@@ -232,6 +263,15 @@ export async function readBranches(path: string): Promise<string[]> {
     .split(/\r?\n/)
     .map((line) => line.trim())
     .filter(Boolean);
+}
+
+export async function readBranchTracking(path: string): Promise<BranchTrackingInfo[]> {
+  const { stdout } = await git(path, [
+    "for-each-ref",
+    "--format=%(refname:short)|%(upstream:short)|%(upstream:track)",
+    "refs/heads"
+  ]);
+  return parseBranchTrackingRefs(stdout);
 }
 
 export async function readMergedBranches(path: string): Promise<string[]> {

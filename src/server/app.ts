@@ -10,6 +10,7 @@ import {
   deleteBranch,
   readBranches,
   readBranchStatus,
+  readBranchTracking,
   readContainingBranches,
   readMergedBranches,
   readRecentCommits,
@@ -457,11 +458,12 @@ export async function snapshotProject(
   }
 
   try {
-    const [branch, rawWorktrees, branchNames, mergedBranches, recentCommits] = await Promise.all([
+    const [branch, rawWorktrees, branchNames, mergedBranches, branchTracking, recentCommits] = await Promise.all([
       readBranchStatus(project.path),
       readWorktrees(project.path),
       readBranches(project.path),
       readMergedBranches(project.path),
+      readBranchTracking(project.path),
       readRecentCommits(project.path)
     ]);
     const worktrees = await Promise.all(
@@ -485,14 +487,25 @@ export async function snapshotProject(
         };
       })
     );
-    const branches = branchNames.map((branchName) =>
-      buildBranchInfo({
-        branch: branchName,
-        currentBranch: branch.branch,
-        mergedBranches,
-        worktrees
-      })
-    );
+    const branchTrackingByName = new Map(branchTracking.map((tracking) => [tracking.name, tracking]));
+    const branches = branchNames.map((branchName) => {
+      const tracking = branchTrackingByName.get(branchName);
+      return {
+        ...buildBranchInfo({
+          branch: branchName,
+          currentBranch: branch.branch,
+          mergedBranches,
+          worktrees
+        }),
+        ...(tracking
+          ? {
+              upstream: tracking.upstream,
+              ahead: tracking.ahead,
+              behind: tracking.behind
+            }
+          : {})
+      };
+    });
 
     return {
       ...project,

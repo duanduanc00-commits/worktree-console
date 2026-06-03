@@ -1195,14 +1195,22 @@ h1 {
 }
 
 .branch-meta {
+  display: block;
   color: var(--muted);
   font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.branch-tracking {
+  color: var(--subtle);
 }
 
 .branch-actions {
   display: inline-flex;
   align-items: center;
+  align-self: start;
   gap: 5px;
+  padding-top: 2px;
 }
 
 .commit {

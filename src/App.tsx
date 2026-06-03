@@ -1149,32 +1149,41 @@ function BranchPanel({
         {project.branches.length === 0 ? (
           <div className="empty-state compact">No branches available.</div>
         ) : (
-          project.branches.map((branch) => (
-            <div className="branch-row" key={branch.name}>
-              <div className="branch-main">
-                <strong>{branch.name}</strong>
-                <ExplainableText className="branch-meta" tooltip={branchMetaTooltip(branch)}>
-                  {branchMetaLabel(branch)}
-                </ExplainableText>
+          project.branches.map((branch) => {
+            const trackingLabel = branchTrackingLabel(branch);
+
+            return (
+              <div className="branch-row" key={branch.name}>
+                <div className="branch-main">
+                  <strong>{branch.name}</strong>
+                  <ExplainableText className="branch-meta" tooltip={branchMetaTooltip(branch)}>
+                    {branchMetaLabel(branch)}
+                  </ExplainableText>
+                  {trackingLabel ? (
+                    <ExplainableText className="branch-meta branch-tracking" tooltip={branchTrackingTooltip(branch)}>
+                      {trackingLabel}
+                    </ExplainableText>
+                  ) : null}
+                </div>
+                <span className="branch-actions">
+                  <ExplainableBadge align="right" tone={removalTone(branch.removal.level)} tooltip={removalTooltip(branch.removal)}>
+                    {branch.removal.label}
+                  </ExplainableBadge>
+                  {branch.removal.canDelete ? (
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      aria-label={`Delete branch ${branch.name}`}
+                      title={`Delete branch ${branch.name}`}
+                      onClick={() => onDeleteBranch(project, branch)}
+                    >
+                      <Trash2 size={14} />
+                    </Button>
+                  ) : null}
+                </span>
               </div>
-              <span className="branch-actions">
-                <ExplainableBadge align="right" tone={removalTone(branch.removal.level)} tooltip={removalTooltip(branch.removal)}>
-                  {branch.removal.label}
-                </ExplainableBadge>
-                {branch.removal.canDelete ? (
-                  <Button
-                    size="icon"
-                    variant="ghost"
-                    aria-label={`Delete branch ${branch.name}`}
-                    title={`Delete branch ${branch.name}`}
-                    onClick={() => onDeleteBranch(project, branch)}
-                  >
-                    <Trash2 size={14} />
-                  </Button>
-                ) : null}
-              </span>
-            </div>
-          ))
+            );
+          })
         )}
       </div>
     </section>
@@ -1911,6 +1920,30 @@ function branchMetaTooltip(branch: BranchInfo) {
     branch.usedByWorktree ? "A local worktree is using it, so branch deletion is blocked." : "No registered worktree is using it."
   ];
   return details.join(" ");
+}
+
+function branchTrackingLabel(branch: BranchInfo) {
+  if (!branch.upstream) return null;
+
+  const parts = [`upstream ${branch.upstream}`];
+  if ((branch.ahead ?? 0) > 0) parts.push(`ahead ${branch.ahead}`);
+  if ((branch.behind ?? 0) > 0) parts.push(`behind ${branch.behind}`);
+  return parts.join(" · ");
+}
+
+function branchTrackingTooltip(branch: BranchInfo) {
+  if (!branch.upstream) return "No upstream branch is configured.";
+
+  const ahead = branch.ahead ?? 0;
+  const behind = branch.behind ?? 0;
+  if (ahead === 0 && behind === 0) {
+    return `Tracks ${branch.upstream}. Git did not report any ahead or behind commits.`;
+  }
+
+  const parts = [`Tracks ${branch.upstream}.`];
+  if (ahead > 0) parts.push(`${ahead} commit(s) ahead of upstream.`);
+  if (behind > 0) parts.push(`${behind} commit(s) behind upstream.`);
+  return parts.join(" ");
 }
 
 function worktreeChangeTooltip(worktree: WorktreeInfo) {

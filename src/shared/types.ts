@@ -48,6 +48,9 @@ export type BranchInfo = {
   protected: boolean;
   merged: boolean;
   usedByWorktree: boolean;
+  upstream?: string | null;
+  ahead?: number;
+  behind?: number;
   removal: RemovalAssessment;
 };
 
