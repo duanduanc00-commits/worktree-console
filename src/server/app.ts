@@ -325,13 +325,13 @@ export function createApp({
         return;
       }
 
-      const changedFile = worktree.changes?.some((change) => change.path === filePath);
+      const changedFile = worktree.changes?.find((change) => change.path === filePath);
       if (!changedFile) {
         response.status(404).json({ error: "Changed file not found in worktree." });
         return;
       }
 
-      const diff = await readWorktreeFileDiff(worktree.path, filePath, 200);
+      const diff = await readWorktreeFileDiff(worktree.path, filePath, changedFile, 200);
       const payload: WorktreeDiffResponse = {
         worktreePath: worktree.path,
         filePath,

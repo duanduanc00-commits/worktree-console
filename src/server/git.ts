@@ -1,4 +1,5 @@
-import { access } from "node:fs/promises";
+import { access, readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { promisify } from "node:util";
 import { execFile } from "node:child_process";
 
@@ -6,6 +7,7 @@ import type { BranchStatus, RecentCommit, WorktreeChange, WorktreeInfo } from ".
 
 const execFileAsync = promisify(execFile);
 const prettyCommitFormat = "--pretty=format:%h%x1f%s%x1f%an%x1f%cr";
+const safeDiffArgs = ["--no-ext-diff", "--no-textconv"];
 
 export type RecentCommitRange = "24h" | "7d" | "30d" | "all";
 
@@ -110,12 +112,12 @@ export async function readBranchStatus(path: string): Promise<BranchStatus> {
 }
 
 export async function readWorktreeChanges(path: string): Promise<WorktreeChange[]> {
-  const { stdout } = await git(path, ["status", "--short"]);
+  const { stdout } = await git(path, ["status", "--short", "--untracked-files=all"]);
   return parseShortStatusChanges(stdout);
 }
 
 export function buildWorktreeDiffArgs(filePath: string): string[] {
-  return ["diff", "--", filePath];
+  return ["diff", ...safeDiffArgs, "--", filePath];
 }
 
 export function limitDiffLines(
@@ -139,9 +141,16 @@ export function limitDiffLines(
 export async function readWorktreeFileDiff(
   worktreePath: string,
   filePath: string,
+  change?: WorktreeChange,
   maxLines = 200
 ): Promise<{ diff: string; truncated: boolean; lineCount: number }> {
-  const { stdout } = await git(worktreePath, buildWorktreeDiffArgs(filePath));
+  if (isUntrackedChange(change)) {
+    const content = await readFile(join(worktreePath, filePath), "utf8");
+    return limitDiffLines(buildSyntheticAddedFileDiff(filePath, content), maxLines);
+  }
+
+  const args = isStagedChange(change) ? buildCachedWorktreeDiffArgs(filePath) : buildWorktreeDiffArgs(filePath);
+  const { stdout } = await git(worktreePath, args);
   return limitDiffLines(stdout, maxLines);
 }
 
@@ -231,6 +240,33 @@ function sinceForRange(range: RecentCommitRange): string | null {
   if (range === "7d") return "7 days ago";
   if (range === "30d") return "30 days ago";
   return null;
+}
+
+function buildCachedWorktreeDiffArgs(filePath: string): string[] {
+  return ["diff", "--cached", ...safeDiffArgs, "--", filePath];
+}
+
+function buildSyntheticAddedFileDiff(filePath: string, content: string): string {
+  const lines = content.replace(/\r\n/g, "\n").split("\n");
+  if (content.endsWith("\n")) {
+    lines.pop();
+  }
+
+  return [
+    `diff --git a/${filePath} b/${filePath}`,
+    "new file mode 100644",
+    "--- /dev/null",
+    `+++ b/${filePath}`,
+    ...lines.map((line) => `+${line}`)
+  ].join("\n");
+}
+
+function isStagedChange(change?: WorktreeChange): boolean {
+  return Boolean(change && change.raw.slice(0, 1) !== " " && !isUntrackedChange(change));
+}
+
+function isUntrackedChange(change?: WorktreeChange): boolean {
+  return change?.raw.slice(0, 2) === "??" || change?.code === "??";
 }
 
 async function git(cwd: string, args: string[]) {

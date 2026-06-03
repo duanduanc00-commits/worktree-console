@@ -101,8 +101,14 @@ describe("buildRecentCommitArgs", () => {
 });
 
 describe("buildWorktreeDiffArgs", () => {
-  it("builds bounded file diff args for a worktree-relative path", () => {
-    expect(buildWorktreeDiffArgs("src/App.tsx")).toEqual(["diff", "--", "src/App.tsx"]);
+  it("builds safe file diff args for a worktree-relative path", () => {
+    expect(buildWorktreeDiffArgs("src/App.tsx")).toEqual([
+      "diff",
+      "--no-ext-diff",
+      "--no-textconv",
+      "--",
+      "src/App.tsx"
+    ]);
   });
 });
 

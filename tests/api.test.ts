@@ -269,6 +269,56 @@ describe("createApp", () => {
       .query({ path: repoPath, file: "README.md" })
       .expect(404);
   });
+
+  it("returns a non-empty diff for staged-only changed files", async () => {
+    const repoPath = join(tempDir, "repo");
+    await createGitRepo(repoPath);
+    await writeLines(repoPath, "README.md", 4);
+    await git(repoPath, ["add", "README.md"]);
+
+    const registry = new ProjectRegistry(join(tempDir, "projects.json"));
+    const app = createApp({
+      activityLog: new ActivityLog(join(tempDir, "activity.json")),
+      registry
+    });
+    const project = await registry.addProject({ name: "Repo", path: repoPath, tags: [] });
+
+    const response = await request(app)
+      .get(`/api/projects/${project.id}/worktrees/diff`)
+      .query({ path: repoPath, file: "README.md" })
+      .expect(200);
+
+    expect(response.body.diff).toContain("diff --git");
+    expect(response.body.diff).toContain("+line 4");
+    expect(response.body.diff).not.toEqual("");
+    expect(response.body.truncated).toBe(false);
+  });
+
+  it("returns a synthetic added-file diff for untracked files", async () => {
+    const repoPath = join(tempDir, "repo");
+    await createGitRepo(repoPath);
+    await writeLines(repoPath, "src/NewFile.ts", 3);
+
+    const registry = new ProjectRegistry(join(tempDir, "projects.json"));
+    const app = createApp({
+      activityLog: new ActivityLog(join(tempDir, "activity.json")),
+      registry
+    });
+    const project = await registry.addProject({ name: "Repo", path: repoPath, tags: [] });
+
+    const response = await request(app)
+      .get(`/api/projects/${project.id}/worktrees/diff`)
+      .query({ path: repoPath, file: "src/NewFile.ts" })
+      .expect(200);
+
+    expect(response.body.diff).toContain("diff --git a/src/NewFile.ts b/src/NewFile.ts");
+    expect(response.body.diff).toContain("new file mode 100644");
+    expect(response.body.diff).toContain("--- /dev/null");
+    expect(response.body.diff).toContain("+++ b/src/NewFile.ts");
+    expect(response.body.diff).toContain("+line 1");
+    expect(response.body.diff).toContain("+line 3");
+    expect(response.body.truncated).toBe(false);
+  });
 });
 
 async function createGitRepo(repoPath: string): Promise<void> {
