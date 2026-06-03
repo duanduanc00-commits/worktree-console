@@ -208,6 +208,7 @@ export function App() {
     } else {
       setInspectorTab("trees");
     }
+    setView("projects");
   }
 
   async function handleOpenFolder(project: ProjectSnapshot) {
