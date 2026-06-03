@@ -26,3 +26,9 @@ export function serviceGroupActionDisabled(
   if (action === "stop") return status === "stopped";
   return status === "stopped";
 }
+
+export function serviceGroupActionLabel(action: ServiceGroupAction, busy: boolean): string {
+  if (action === "start") return busy ? "Starting..." : "Start Group";
+  if (action === "stop") return busy ? "Stopping..." : "Stop Group";
+  return busy ? "Restarting..." : "Restart Group";
+}

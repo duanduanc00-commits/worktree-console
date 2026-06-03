@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   serviceGroupActionDisabled,
+  serviceGroupActionLabel,
   serviceGroupStatusLabel,
   serviceGroupStatusTone
 } from "../src/lib/service-groups-ui";
@@ -35,5 +36,14 @@ describe("service-groups-ui", () => {
     expect(serviceGroupActionDisabled("start", "stopped", 0)).toBe(true);
     expect(serviceGroupActionDisabled("stop", "running", 0)).toBe(true);
     expect(serviceGroupActionDisabled("restart", "running", 0)).toBe(true);
+  });
+
+  it("only shows busy action labels for the active group", () => {
+    expect(serviceGroupActionLabel("start", true)).toBe("Starting...");
+    expect(serviceGroupActionLabel("start", false)).toBe("Start Group");
+    expect(serviceGroupActionLabel("stop", true)).toBe("Stopping...");
+    expect(serviceGroupActionLabel("stop", false)).toBe("Stop Group");
+    expect(serviceGroupActionLabel("restart", true)).toBe("Restarting...");
+    expect(serviceGroupActionLabel("restart", false)).toBe("Restart Group");
   });
 });

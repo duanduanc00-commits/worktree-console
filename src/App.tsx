@@ -56,6 +56,7 @@ import {
 } from "./lib/service-ui";
 import {
   serviceGroupActionDisabled,
+  serviceGroupActionLabel,
   serviceGroupStatusLabel,
   serviceGroupStatusTone
 } from "./lib/service-groups-ui";
@@ -1284,7 +1285,7 @@ function ServicePanel({
   const [busyServiceId, setBusyServiceId] = useState<string | null>(null);
   const groupBusyRef = useRef(false);
   const keepGroupErrorsForNextSnapshot = useRef(false);
-  const [groupBusyAction, setGroupBusyAction] = useState<ServiceGroupAction | "delete" | null>(null);
+  const [groupBusy, setGroupBusy] = useState<{ id: string; action: ServiceGroupAction | "delete" } | null>(null);
   const [groupDialogOpen, setGroupDialogOpen] = useState(false);
   const [groupErrors, setGroupErrors] = useState<Record<string, string>>({});
   const [expandedLogs, setExpandedLogs] = useState<string | null>(null);
@@ -1295,7 +1296,7 @@ function ServicePanel({
   useEffect(() => {
     groupBusyRef.current = false;
     keepGroupErrorsForNextSnapshot.current = false;
-    setGroupBusyAction(null);
+    setGroupBusy(null);
     setGroupDialogOpen(false);
     setGroupErrors({});
   }, [project.id]);
@@ -1333,7 +1334,7 @@ function ServicePanel({
     if (groupBusyRef.current) return;
 
     groupBusyRef.current = true;
-    setGroupBusyAction(actionName);
+    setGroupBusy({ id: group.id, action: actionName });
     setGroupErrors((current) => {
       const next = { ...current };
       delete next[group.id];
@@ -1356,7 +1357,7 @@ function ServicePanel({
       setGroupErrors((current) => ({ ...current, [group.id]: (caught as Error).message }));
     } finally {
       groupBusyRef.current = false;
-      setGroupBusyAction(null);
+      setGroupBusy(null);
     }
   }
 
@@ -1368,7 +1369,7 @@ function ServicePanel({
     if (groupBusyRef.current) return;
 
     groupBusyRef.current = true;
-    setGroupBusyAction("delete");
+    setGroupBusy({ id: group.id, action: "delete" });
     setGroupErrors((current) => {
       const next = { ...current };
       delete next[group.id];
@@ -1381,7 +1382,7 @@ function ServicePanel({
       setGroupErrors((current) => ({ ...current, [group.id]: (caught as Error).message }));
     } finally {
       groupBusyRef.current = false;
-      setGroupBusyAction(null);
+      setGroupBusy(null);
     }
   }
 
@@ -1428,7 +1429,8 @@ function ServicePanel({
         ) : (
           <div className="service-group-list">
             {serviceGroups.map((group) => {
-              const groupBusy = groupBusyAction !== null;
+              const groupActionBusy = groupBusy !== null;
+              const activeGroupBusy = groupBusy?.id === group.id;
               const serviceCount = group.services.length;
               const groupError = groupErrors[group.id];
               return (
@@ -1461,32 +1463,32 @@ function ServicePanel({
 
                   <div className="service-group-actions">
                     <Button
-                      disabled={groupBusy || serviceGroupActionDisabled("start", group.status, serviceCount)}
+                      disabled={groupActionBusy || serviceGroupActionDisabled("start", group.status, serviceCount)}
                       title="Start group"
                       onClick={() => void runGroupAction(group, "start")}
                     >
                       <Play size={14} />
-                      {groupBusyAction === "start" ? "Starting..." : "Start Group"}
+                      {serviceGroupActionLabel("start", activeGroupBusy && groupBusy?.action === "start")}
                     </Button>
                     <Button
-                      disabled={groupBusy || serviceGroupActionDisabled("stop", group.status, serviceCount)}
+                      disabled={groupActionBusy || serviceGroupActionDisabled("stop", group.status, serviceCount)}
                       title="Stop group"
                       onClick={() => void runGroupAction(group, "stop")}
                     >
                       <Square size={13} />
-                      {groupBusyAction === "stop" ? "Stopping..." : "Stop Group"}
+                      {serviceGroupActionLabel("stop", activeGroupBusy && groupBusy?.action === "stop")}
                     </Button>
                     <Button
-                      disabled={groupBusy || serviceGroupActionDisabled("restart", group.status, serviceCount)}
+                      disabled={groupActionBusy || serviceGroupActionDisabled("restart", group.status, serviceCount)}
                       title="Restart group"
                       onClick={() => void runGroupAction(group, "restart")}
                     >
                       <RotateCcw size={14} />
-                      {groupBusyAction === "restart" ? "Restarting..." : "Restart Group"}
+                      {serviceGroupActionLabel("restart", activeGroupBusy && groupBusy?.action === "restart")}
                     </Button>
                     <Button
                       aria-label={`Remove service group ${group.name}`}
-                      disabled={groupBusy}
+                      disabled={groupActionBusy}
                       size="icon"
                       title={`Remove service group ${group.name}`}
                       variant="ghost"
