@@ -5,6 +5,7 @@ export type RegisteredProject = {
   tags: string[];
   pinned: boolean;
   services: RegisteredService[];
+  serviceGroups: RegisteredServiceGroup[];
   createdAt: string;
   updatedAt: string;
 };
@@ -16,6 +17,14 @@ export type RegisteredService = {
   command: string;
   ports: number[];
   healthUrl: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type RegisteredServiceGroup = {
+  id: string;
+  name: string;
+  serviceIds: string[];
   createdAt: string;
   updatedAt: string;
 };
@@ -99,7 +108,7 @@ export type ServiceSnapshot = RegisteredService & {
   error?: string;
 };
 
-export type ProjectSnapshot = Omit<RegisteredProject, "services"> & {
+export type ProjectSnapshot = Omit<RegisteredProject, "services" | "serviceGroups"> & {
   exists: boolean;
   isGitRepository: boolean;
   status: "clean" | "dirty" | "missing" | "error";
@@ -108,6 +117,7 @@ export type ProjectSnapshot = Omit<RegisteredProject, "services"> & {
   branches: BranchInfo[];
   recentCommits: RecentCommit[];
   services: ServiceSnapshot[];
+  serviceGroups?: RegisteredServiceGroup[];
   error?: string;
 };
 
