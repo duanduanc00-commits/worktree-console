@@ -191,6 +191,89 @@ describe("buildHealthSummary", () => {
     expect(summary.issues[1].detail).toContain("3001:9876");
   });
 
+  it("flags removable worktrees even when the matching branch is blocked", () => {
+    const summary = buildHealthSummary([
+      project({
+        worktrees: [
+          worktree({
+            path: "C:/repos/demo/.worktrees/done",
+            branch: "feature/done",
+            removal: { level: "safe", label: "Safe", reasons: ["Merged"], canDelete: true }
+          })
+        ],
+        branches: [
+          branch({
+            name: "feature/done",
+            usedByWorktree: true,
+            removal: { level: "blocked", label: "In use", reasons: ["Used by worktree"], canDelete: false }
+          })
+        ]
+      })
+    ]);
+
+    expect(summary.issues).toEqual([
+      expect.objectContaining({
+        kind: "cleanup-candidate",
+        targetType: "worktree",
+        target: "C:/repos/demo/.worktrees/done"
+      })
+    ]);
+    expect(summary.counts.cleanupCandidates).toBe(1);
+  });
+
+  it("flags cleanup only for safe branches not represented by worktrees", () => {
+    const summary = buildHealthSummary([
+      project({
+        worktrees: [
+          worktree({
+            path: "C:/repos/demo/.worktrees/attached",
+            branch: "feature/attached",
+            removal: { level: "safe", label: "Safe", reasons: ["Merged"], canDelete: true }
+          })
+        ],
+        branches: [
+          branch({
+            name: "feature/attached",
+            usedByWorktree: true,
+            removal: { level: "safe", label: "Safe", reasons: ["Merged"], canDelete: true }
+          }),
+          branch({
+            name: "feature/old",
+            removal: { level: "safe", label: "Safe", reasons: ["Merged"], canDelete: true }
+          })
+        ]
+      })
+    ]);
+
+    expect(summary.issues).toEqual([
+      expect.objectContaining({
+        kind: "cleanup-candidate",
+        targetType: "worktree",
+        target: "C:/repos/demo/.worktrees/attached"
+      }),
+      expect.objectContaining({
+        kind: "cleanup-candidate",
+        targetType: "branch",
+        target: "feature/old"
+      })
+    ]);
+    expect(summary.counts.cleanupCandidates).toBe(2);
+  });
+
+  it("does not warn for stopped one-shot task services", () => {
+    const summary = buildHealthSummary([
+      project({
+        services: [
+          service({ id: "task-null-health", status: "stopped", pid: null, ports: [], portsStatus: [], healthUrl: null }),
+          service({ id: "task-empty-health", status: "stopped", pid: null, ports: [], portsStatus: [], healthUrl: "" })
+        ]
+      })
+    ]);
+
+    expect(summary.issues).toEqual([]);
+    expect(summary.counts.stoppedServices).toBe(0);
+  });
+
   it("counts critical, warning, and info issues correctly", () => {
     const summary = buildHealthSummary([
       project({ status: "missing", exists: false, isGitRepository: false }),

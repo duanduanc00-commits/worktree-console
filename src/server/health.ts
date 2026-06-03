@@ -102,6 +102,10 @@ export function buildHealthSummary(projects: ProjectSnapshot[]): HealthSummary {
   for (const project of projects) {
     for (const service of project.services) {
       if (service.status === "stopped") {
+        if (service.ports.length === 0 && !service.healthUrl) {
+          continue;
+        }
+
         issues.push(
           issue({
             kind: "stopped-service",
@@ -118,19 +122,35 @@ export function buildHealthSummary(projects: ProjectSnapshot[]): HealthSummary {
   }
 
   for (const project of projects) {
-    for (const worktree of project.worktrees) {
-      const matchingBranch = project.branches.find((branch) => branch.name === worktree.branch);
+    const worktreeBranches = new Set(project.worktrees.map((worktree) => worktree.branch).filter(Boolean));
 
-      if (worktree.removal?.canDelete && matchingBranch?.removal.canDelete) {
+    for (const worktree of project.worktrees) {
+      if (worktree.removal?.canDelete) {
         issues.push(
           issue({
             kind: "cleanup-candidate",
             severity: "info",
             title: `${worktree.branch ?? worktree.path} can be cleaned up`,
-            detail: "The worktree and its branch are both marked safe to delete.",
+            detail: "The worktree is marked safe to delete.",
             project,
             targetType: "worktree",
             target: worktree.path
+          })
+        );
+      }
+    }
+
+    for (const branch of project.branches) {
+      if (branch.removal.canDelete && !worktreeBranches.has(branch.name)) {
+        issues.push(
+          issue({
+            kind: "cleanup-candidate",
+            severity: "info",
+            title: `${branch.name} can be cleaned up`,
+            detail: "The branch is marked safe to delete and is not attached to a listed worktree.",
+            project,
+            targetType: "branch",
+            target: branch.name
           })
         );
       }
