@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildRecentCommitArgs,
+  buildSyntheticUntrackedDiff,
   buildWorktreeDiffArgs,
   limitDiffLines,
   parseBranchStatus,
@@ -127,5 +128,43 @@ describe("limitDiffLines", () => {
       truncated: true,
       lineCount: 3
     });
+  });
+});
+
+describe("buildSyntheticUntrackedDiff", () => {
+  it("builds a symlink diff using only the link target text", () => {
+    expect(
+      buildSyntheticUntrackedDiff("src/config-link", {
+        kind: "symlink",
+        linkTarget: "../../secrets/config.json"
+      })
+    ).toBe(
+      [
+        "diff --git a/src/config-link b/src/config-link",
+        "new file mode 120000",
+        "--- /dev/null",
+        "+++ b/src/config-link",
+        "@@ -0,0 +1 @@",
+        "+../../secrets/config.json"
+      ].join("\n")
+    );
+  });
+
+  it("builds an unsupported-file diff message without file contents", () => {
+    expect(
+      buildSyntheticUntrackedDiff("src/generated", {
+        kind: "unsupported",
+        description: "directory"
+      })
+    ).toBe(
+      [
+        "diff --git a/src/generated b/src/generated",
+        "new file mode 000000",
+        "--- /dev/null",
+        "+++ b/src/generated",
+        "@@ -0,0 +1 @@",
+        "+Unsupported untracked directory; contents were not read."
+      ].join("\n")
+    );
   });
 });

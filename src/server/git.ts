@@ -1,4 +1,4 @@
-import { access, readFile } from "node:fs/promises";
+import { access, lstat, readFile, readlink } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { execFile } from "node:child_process";
@@ -15,6 +15,11 @@ export type RecentCommitOptions = {
   limit?: number;
   range?: RecentCommitRange;
 };
+
+export type SyntheticUntrackedDiffInput =
+  | { kind: "file"; content: string }
+  | { kind: "symlink"; linkTarget: string }
+  | { kind: "unsupported"; description: string };
 
 export function parseBranchStatus(output: string): BranchStatus {
   const lines = output.split(/\r?\n/).filter(Boolean);
@@ -145,8 +150,7 @@ export async function readWorktreeFileDiff(
   maxLines = 200
 ): Promise<{ diff: string; truncated: boolean; lineCount: number }> {
   if (isUntrackedChange(change)) {
-    const content = await readFile(join(worktreePath, filePath), "utf8");
-    return limitDiffLines(buildSyntheticAddedFileDiff(filePath, content), maxLines);
+    return limitDiffLines(await buildSyntheticUntrackedDiffFromPath(worktreePath, filePath), maxLines);
   }
 
   const args = isStagedChange(change) ? buildCachedWorktreeDiffArgs(filePath) : buildWorktreeDiffArgs(filePath);
@@ -246,19 +250,57 @@ function buildCachedWorktreeDiffArgs(filePath: string): string[] {
   return ["diff", "--cached", ...safeDiffArgs, "--", filePath];
 }
 
-function buildSyntheticAddedFileDiff(filePath: string, content: string): string {
-  const lines = content.replace(/\r\n/g, "\n").split("\n");
-  if (content.endsWith("\n")) {
+export function buildSyntheticUntrackedDiff(filePath: string, input: SyntheticUntrackedDiffInput): string {
+  if (input.kind === "symlink") {
+    return buildOneLineAddedDiff(filePath, "120000", input.linkTarget);
+  }
+
+  if (input.kind === "unsupported") {
+    return buildOneLineAddedDiff(
+      filePath,
+      "000000",
+      `Unsupported untracked ${input.description}; contents were not read.`
+    );
+  }
+
+  const lines = input.content.replace(/\r\n/g, "\n").split("\n");
+  if (input.content.endsWith("\n")) {
     lines.pop();
   }
 
-  return [
-    `diff --git a/${filePath} b/${filePath}`,
-    "new file mode 100644",
-    "--- /dev/null",
-    `+++ b/${filePath}`,
-    ...lines.map((line) => `+${line}`)
-  ].join("\n");
+  return buildAddedDiffHeader(filePath, "100644").concat(lines.map((line) => `+${line}`)).join("\n");
+}
+
+async function buildSyntheticUntrackedDiffFromPath(worktreePath: string, filePath: string): Promise<string> {
+  const path = join(worktreePath, filePath);
+  const stats = await lstat(path);
+
+  if (stats.isSymbolicLink()) {
+    return buildSyntheticUntrackedDiff(filePath, {
+      kind: "symlink",
+      linkTarget: await readlink(path)
+    });
+  }
+
+  if (stats.isFile()) {
+    return buildSyntheticUntrackedDiff(filePath, {
+      kind: "file",
+      content: await readFile(path, "utf8")
+    });
+  }
+
+  return buildSyntheticUntrackedDiff(filePath, {
+    kind: "unsupported",
+    description: stats.isDirectory() ? "directory" : "file type"
+  });
+}
+
+function buildOneLineAddedDiff(filePath: string, mode: string, line: string): string {
+  return [...buildAddedDiffHeader(filePath, mode), "@@ -0,0 +1 @@", `+${line}`].join("\n");
+}
+
+function buildAddedDiffHeader(filePath: string, mode: string): string[] {
+  return [`diff --git a/${filePath} b/${filePath}`, `new file mode ${mode}`, "--- /dev/null", `+++ b/${filePath}`];
 }
 
 function isStagedChange(change?: WorktreeChange): boolean {
