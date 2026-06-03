@@ -22,6 +22,7 @@ import { ProjectRegistry } from "./registry";
 import { assessWorktreeRemoval, buildBranchInfo } from "./safety";
 import { ServiceManager } from "./services";
 import { selectFolder as selectLocalFolder } from "./folderPicker";
+import { buildHealthSummary } from "./health";
 import type { ActivityEvent, DashboardResponse, ProjectSnapshot, RegisteredProject, RegisteredService, ServiceSnapshot } from "../shared/types";
 
 export type AppDependencies = {
@@ -471,20 +472,23 @@ export async function snapshotProject(
 }
 
 function buildDashboardResponse(projects: ProjectSnapshot[]): DashboardResponse {
+  const sortedProjects = [...projects].sort((a, b) => Number(b.pinned) - Number(a.pinned) || a.name.localeCompare(b.name));
+
   return {
-    projects: projects.sort((a, b) => Number(b.pinned) - Number(a.pinned) || a.name.localeCompare(b.name)),
+    projects: sortedProjects,
     summary: {
-      projects: projects.length,
-      worktrees: projects.reduce((sum, project) => sum + project.worktrees.length, 0),
-      services: projects.reduce((sum, project) => sum + project.services.length, 0),
-      runningServices: projects.reduce(
+      projects: sortedProjects.length,
+      worktrees: sortedProjects.reduce((sum, project) => sum + project.worktrees.length, 0),
+      services: sortedProjects.reduce((sum, project) => sum + project.services.length, 0),
+      runningServices: sortedProjects.reduce(
         (sum, project) => sum + project.services.filter((service) => service.status === "running").length,
         0
       ),
-      dirty: projects.filter((project) => project.status === "dirty").length,
-      missing: projects.filter((project) => project.status === "missing").length,
-      clean: projects.filter((project) => project.status === "clean").length
-    }
+      dirty: sortedProjects.filter((project) => project.status === "dirty").length,
+      missing: sortedProjects.filter((project) => project.status === "missing").length,
+      clean: sortedProjects.filter((project) => project.status === "clean").length
+    },
+    health: buildHealthSummary(sortedProjects)
   };
 }
 

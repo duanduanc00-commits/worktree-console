@@ -59,6 +59,17 @@ describe("createApp", () => {
       missing: 1,
       clean: 0
     });
+    expect(dashboardResponse.body.health).toMatchObject({
+      counts: expect.objectContaining({
+        missingProjects: 1
+      }),
+      issues: expect.arrayContaining([
+        expect.objectContaining({
+          kind: "missing-project",
+          projectName: "Missing repo"
+        })
+      ])
+    });
     expect(dashboardResponse.body.projects[0]).toMatchObject({
       id: addResponse.body.id,
       name: "Missing repo",

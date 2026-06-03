@@ -70,7 +70,21 @@ type CommitRange = "24h" | "7d" | "30d" | "all";
 
 const emptyDashboard: DashboardResponse = {
   projects: [],
-  summary: { projects: 0, worktrees: 0, services: 0, runningServices: 0, dirty: 0, missing: 0, clean: 0 }
+  summary: { projects: 0, worktrees: 0, services: 0, runningServices: 0, dirty: 0, missing: 0, clean: 0 },
+  health: {
+    counts: {
+      critical: 0,
+      warning: 0,
+      info: 0,
+      dirtyProjects: 0,
+      dirtyWorktrees: 0,
+      cleanupCandidates: 0,
+      stoppedServices: 0,
+      occupiedPorts: 0,
+      missingProjects: 0
+    },
+    issues: []
+  }
 };
 
 export function App() {
