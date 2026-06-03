@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { basename } from "node:path";
+import { basename, join } from "node:path";
 
 import express from "express";
 
@@ -17,16 +17,23 @@ import {
   readWorktrees,
   removeWorktree
 } from "./git";
+import { ActivityLog, type ActivityInput } from "./activity";
 import { ProjectRegistry } from "./registry";
 import { assessWorktreeRemoval, buildBranchInfo } from "./safety";
 import { ServiceManager } from "./services";
 import { selectFolder as selectLocalFolder } from "./folderPicker";
-import type { DashboardResponse, ProjectSnapshot, RegisteredProject, RegisteredService, ServiceSnapshot } from "../shared/types";
+import type { ActivityEvent, DashboardResponse, ProjectSnapshot, RegisteredProject, RegisteredService, ServiceSnapshot } from "../shared/types";
 
 export type AppDependencies = {
   registry: ProjectRegistry;
+  activityLog?: ActivityRecorder;
   serviceManager?: ServiceController;
   selectFolder?: () => Promise<string | null>;
+};
+
+type ActivityRecorder = {
+  list(limit?: number): Promise<ActivityEvent[]>;
+  record(input: ActivityInput): Promise<ActivityEvent>;
 };
 
 type ServiceController = {
@@ -38,12 +45,25 @@ type ServiceController = {
 };
 
 export function createApp({
+  activityLog = new ActivityLog(join(process.cwd(), "data", "activity-log.json")),
   registry,
   serviceManager = new ServiceManager(),
   selectFolder = selectLocalFolder
 }: AppDependencies) {
   const app = express();
   app.use(express.json());
+
+  app.get("/api/health", (_request, response) => {
+    response.json({ ok: true });
+  });
+
+  app.get("/api/activity", async (request, response, next) => {
+    try {
+      response.json({ events: await activityLog.list(Number(request.query.limit ?? 100)) });
+    } catch (error) {
+      next(error);
+    }
+  });
 
   app.post("/api/system/select-folder", async (_request, response, next) => {
     try {
@@ -77,6 +97,14 @@ export function createApp({
       }
 
       const project = await registry.addProject({ name: name || basename(path), path, tags });
+      await recordActivity(activityLog, {
+        action: "project.add",
+        label: "Added project",
+        ...projectActivity(project),
+        targetType: "project",
+        target: project.name,
+        detail: project.path
+      });
       response.status(201).json(project);
     } catch (error) {
       next(error);
@@ -85,7 +113,17 @@ export function createApp({
 
   app.patch("/api/projects/:id", async (request, response, next) => {
     try {
-      response.json(await registry.updateProject(request.params.id, request.body));
+      const before = await findProject(registry, request.params.id);
+      const updated = await registry.updateProject(request.params.id, request.body);
+      await recordActivity(activityLog, {
+        action: "project.update",
+        label: "Updated project",
+        ...projectActivity(updated),
+        targetType: "project",
+        target: updated.name,
+        detail: before.name === updated.name ? updated.path : `Renamed from ${before.name} to ${updated.name}`
+      });
+      response.json(updated);
     } catch (error) {
       next(error);
     }
@@ -93,7 +131,16 @@ export function createApp({
 
   app.delete("/api/projects/:id", async (request, response, next) => {
     try {
+      const project = await findProject(registry, request.params.id);
       await registry.removeProject(request.params.id);
+      await recordActivity(activityLog, {
+        action: "project.remove",
+        label: "Removed project",
+        ...projectActivity(project),
+        targetType: "project",
+        target: project.name,
+        detail: project.path
+      });
       response.status(204).end();
     } catch (error) {
       next(error);
@@ -155,6 +202,14 @@ export function createApp({
       }
 
       const service = await registry.addService(project.id, { name, cwd, command, ports, healthUrl });
+      await recordActivity(activityLog, {
+        action: "service.add",
+        label: "Registered service",
+        ...projectActivity(project),
+        targetType: "service",
+        target: service.name,
+        detail: service.command
+      });
       response.status(201).json(service);
     } catch (error) {
       next(error);
@@ -163,8 +218,16 @@ export function createApp({
 
   app.delete("/api/projects/:id/services/:serviceId", async (request, response, next) => {
     try {
-      const project = await findProject(registry, request.params.id);
+      const { project, service } = await findProjectService(registry, request.params.id, request.params.serviceId);
       await registry.removeService(project.id, request.params.serviceId);
+      await recordActivity(activityLog, {
+        action: "service.remove",
+        label: "Removed service",
+        ...projectActivity(project),
+        targetType: "service",
+        target: service.name,
+        detail: service.command
+      });
       response.status(204).end();
     } catch (error) {
       next(error);
@@ -174,7 +237,16 @@ export function createApp({
   app.post("/api/projects/:id/services/:serviceId/start", async (request, response, next) => {
     try {
       const { project, service } = await findProjectService(registry, request.params.id, request.params.serviceId);
-      response.status(202).json(await serviceManager.start(project.id, service));
+      const snapshot = await serviceManager.start(project.id, service);
+      await recordActivity(activityLog, {
+        action: "service.start",
+        label: "Started service",
+        ...projectActivity(project),
+        targetType: "service",
+        target: service.name,
+        detail: service.command
+      });
+      response.status(202).json(snapshot);
     } catch (error) {
       next(error);
     }
@@ -183,7 +255,16 @@ export function createApp({
   app.post("/api/projects/:id/services/:serviceId/stop", async (request, response, next) => {
     try {
       const { project, service } = await findProjectService(registry, request.params.id, request.params.serviceId);
-      response.status(202).json(await serviceManager.stop(project.id, service));
+      const snapshot = await serviceManager.stop(project.id, service);
+      await recordActivity(activityLog, {
+        action: "service.stop",
+        label: "Stopped service",
+        ...projectActivity(project),
+        targetType: "service",
+        target: service.name,
+        detail: service.command
+      });
+      response.status(202).json(snapshot);
     } catch (error) {
       next(error);
     }
@@ -192,7 +273,16 @@ export function createApp({
   app.post("/api/projects/:id/services/:serviceId/restart", async (request, response, next) => {
     try {
       const { project, service } = await findProjectService(registry, request.params.id, request.params.serviceId);
-      response.status(202).json(await serviceManager.restart(project.id, service));
+      const snapshot = await serviceManager.restart(project.id, service);
+      await recordActivity(activityLog, {
+        action: "service.restart",
+        label: "Restarted service",
+        ...projectActivity(project),
+        targetType: "service",
+        target: service.name,
+        detail: service.command
+      });
+      response.status(202).json(snapshot);
     } catch (error) {
       next(error);
     }
@@ -228,6 +318,14 @@ export function createApp({
       }
 
       await removeWorktree(project.path, worktree.path);
+      await recordActivity(activityLog, {
+        action: "worktree.remove",
+        label: "Removed worktree",
+        ...projectActivity(project),
+        targetType: "worktree",
+        target: worktree.branch ?? worktree.shortHead ?? "detached",
+        detail: worktree.path
+      });
       response.status(202).json({ ok: true });
     } catch (error) {
       next(error);
@@ -250,6 +348,14 @@ export function createApp({
       }
 
       await deleteBranch(project.path, branchInfo.name);
+      await recordActivity(activityLog, {
+        action: "branch.delete",
+        label: "Deleted branch",
+        ...projectActivity(project),
+        targetType: "branch",
+        target: branchInfo.name,
+        detail: branchInfo.removal.reasons.join(" ")
+      });
       response.status(202).json({ ok: true });
     } catch (error) {
       next(error);
@@ -379,6 +485,22 @@ function buildDashboardResponse(projects: ProjectSnapshot[]): DashboardResponse 
       missing: projects.filter((project) => project.status === "missing").length,
       clean: projects.filter((project) => project.status === "clean").length
     }
+  };
+}
+
+async function recordActivity(activityLog: ActivityRecorder, input: ActivityInput): Promise<void> {
+  try {
+    await activityLog.record(input);
+  } catch (error) {
+    console.warn(`Failed to write activity log: ${(error as Error).message}`);
+  }
+}
+
+function projectActivity(project: RegisteredProject): Pick<ActivityEvent, "projectId" | "projectName" | "projectPath"> {
+  return {
+    projectId: project.id,
+    projectName: project.name,
+    projectPath: project.path
   };
 }
 

@@ -1,4 +1,12 @@
-import type { DashboardResponse, RecentCommit, RegisteredProject, RegisteredService, ServiceSnapshot } from "../shared/types";
+import type {
+  ActivityEvent,
+  ActivityResponse,
+  DashboardResponse,
+  RecentCommit,
+  RegisteredProject,
+  RegisteredService,
+  ServiceSnapshot
+} from "../shared/types";
 
 export type AddProjectPayload = {
   name?: string;
@@ -16,6 +24,11 @@ export type AddServicePayload = {
 
 export async function getDashboard(): Promise<DashboardResponse> {
   return request<DashboardResponse>("/api/projects");
+}
+
+export async function getActivity(limit = 100): Promise<ActivityEvent[]> {
+  const params = new URLSearchParams({ limit: String(limit) });
+  return (await request<ActivityResponse>(`/api/activity?${params.toString()}`)).events;
 }
 
 export async function selectFolder(): Promise<string | null> {

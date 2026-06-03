@@ -20,4 +20,16 @@ The frontend runs on Vite and the API listens on `127.0.0.1:4217` by default.
 
 ## Runtime Data
 
-Local registry data is written to `data/projects.json` by default. This file is intentionally ignored because it contains machine-specific project paths and service commands.
+Local runtime data is written under `data/` by default:
+
+- `data/projects.json` stores registered projects and services.
+- `data/activity-log.json` stores console operation history.
+
+The entire `data/` directory is intentionally ignored because it contains machine-specific project paths, service commands, ports, and local operation history.
+
+You can move these files outside the repository with environment variables:
+
+```powershell
+$env:WORKTREE_CONSOLE_REGISTRY="C:\Users\you\AppData\Local\Worktree Console\projects.json"
+$env:WORKTREE_CONSOLE_ACTIVITY_LOG="C:\Users\you\AppData\Local\Worktree Console\activity-log.json"
+```

@@ -1,9 +1,10 @@
-import { FormEvent, useEffect, useMemo, useState, type CSSProperties, type PointerEvent } from "react";
+import { FormEvent, useEffect, useMemo, useState, type CSSProperties, type PointerEvent, type ReactNode } from "react";
 import {
   Copy,
   ExternalLink,
   FolderOpen,
   GitBranch,
+  History,
   LayoutDashboard,
   ListTree,
   Play,
@@ -23,6 +24,7 @@ import {
   addService,
   deleteBranch,
   deleteWorktree,
+  getActivity,
   getDashboard,
   getProjectCommits,
   getServiceLogs,
@@ -46,6 +48,7 @@ import {
   serviceUrl
 } from "./lib/service-ui";
 import type {
+  ActivityEvent,
   BranchInfo,
   DashboardResponse,
   ProjectSnapshot,
@@ -61,7 +64,7 @@ import { Input } from "./components/ui/input";
 import { SegmentedControl, SegmentButton } from "./components/ui/tabs";
 
 type StatusFilter = "all" | "clean" | "dirty" | "missing";
-type SidebarView = "projects" | "worktrees" | "registry";
+type SidebarView = "projects" | "worktrees" | "registry" | "activity";
 type InspectorTab = "trees" | "branches" | "commits" | "services";
 type CommitRange = "24h" | "7d" | "30d" | "all";
 
@@ -82,6 +85,9 @@ export function App() {
   const [serviceDialogProject, setServiceDialogProject] = useState<ProjectSnapshot | null>(null);
   const [editProject, setEditProject] = useState<ProjectSnapshot | null>(null);
   const [loading, setLoading] = useState(true);
+  const [activityEvents, setActivityEvents] = useState<ActivityEvent[]>([]);
+  const [activityLoading, setActivityLoading] = useState(false);
+  const [activityError, setActivityError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [inspectorWidth, setInspectorWidth] = useState(640);
@@ -101,9 +107,41 @@ export function App() {
     }
   }
 
+  async function refreshActivity() {
+    setActivityLoading(true);
+    setActivityError(null);
+    try {
+      setActivityEvents(await getActivity(100));
+    } catch (caught) {
+      setActivityError((caught as Error).message);
+    } finally {
+      setActivityLoading(false);
+    }
+  }
+
+  async function refreshAfterOperation() {
+    await refresh();
+    if (view === "activity") {
+      await refreshActivity();
+    }
+  }
+
+  async function handleRefresh() {
+    await refresh();
+    if (view === "activity") {
+      await refreshActivity();
+    }
+  }
+
   useEffect(() => {
     void refresh();
   }, []);
+
+  useEffect(() => {
+    if (view === "activity") {
+      void refreshActivity();
+    }
+  }, [view]);
 
   const filteredProjects = useMemo(() => {
     const needle = query.trim().toLowerCase();
@@ -135,13 +173,13 @@ export function App() {
     await removeProject(project.id);
     setNotice(`Removed ${project.name} from registry.`);
     setSelectedId(null);
-    await refresh();
+    await refreshAfterOperation();
   }
 
   function handleViewChange(nextView: SidebarView) {
     setView(nextView);
     setTagFilter(null);
-    if (nextView === "worktrees") {
+    if (nextView === "worktrees" || nextView === "activity") {
       setFilter("all");
     }
   }
@@ -174,7 +212,7 @@ export function App() {
           Worktree Console
         </div>
         <div className="toolbar-actions">
-          <Button aria-label="Refresh" disabled={loading} size="icon" onClick={() => void refresh()}>
+          <Button aria-label="Refresh" disabled={loading || activityLoading} size="icon" onClick={() => void handleRefresh()}>
             <RefreshCw size={15} />
           </Button>
           <Button variant="primary" onClick={() => setDialogOpen(true)}>
@@ -203,7 +241,12 @@ export function App() {
               <h1>{viewTitle(view, tagFilter)}</h1>
               <div className="subtitle">{viewSubtitle(view)}</div>
             </div>
-            {selectedProject ? (
+            {view === "activity" ? (
+              <Button disabled={activityLoading} onClick={() => void refreshActivity()}>
+                <RefreshCw size={15} />
+                Refresh Log
+              </Button>
+            ) : selectedProject ? (
               <Button onClick={() => void handleOpenFolder(selectedProject)}>
                 <FolderOpen size={15} />
                 Open Folder
@@ -211,26 +254,26 @@ export function App() {
             ) : null}
           </div>
 
-          <div className="toolbar-row">
-            <label className="search-field">
-              <Search size={15} />
-              <Input
-                aria-label="Search projects"
-                placeholder="Search project, branch, path"
-                value={query}
-                onChange={(event) => setQuery(event.target.value)}
-              />
-            </label>
-            <SegmentedControl>
-              {(["all", "clean", "dirty", "missing"] as const).map((status) => (
-                <SegmentButton key={status} active={filter === status} onClick={() => setFilter(status)}>
-                  {labelStatus(status)}
-                </SegmentButton>
-              ))}
-            </SegmentedControl>
-          </div>
-
-          <StatusStrip dashboard={dashboard} />
+          {view !== "activity" ? (
+            <div className="toolbar-row">
+              <label className="search-field">
+                <Search size={15} />
+                <Input
+                  aria-label="Search projects"
+                  placeholder="Search project, branch, path"
+                  value={query}
+                  onChange={(event) => setQuery(event.target.value)}
+                />
+              </label>
+              <SegmentedControl>
+                {(["all", "clean", "dirty", "missing"] as const).map((status) => (
+                  <SegmentButton key={status} active={filter === status} onClick={() => setFilter(status)}>
+                    {labelStatus(status)}
+                  </SegmentButton>
+                ))}
+              </SegmentedControl>
+            </div>
+          ) : null}
 
           {error ? <div className="error-banner">{error}</div> : null}
           {notice ? (
@@ -240,26 +283,39 @@ export function App() {
             </div>
           ) : null}
 
-          <section className="stats" aria-label="Summary">
-            <Metric label="Projects" value={dashboard.summary.projects} />
-            <Metric label="Worktrees" value={dashboard.summary.worktrees} />
-            <Metric label="Services" value={dashboard.summary.services} />
-            <Metric label="Running" value={dashboard.summary.runningServices} />
-            <Metric label="Dirty" value={dashboard.summary.dirty} />
-            <Metric label="Missing" value={dashboard.summary.missing} />
-          </section>
+          {view === "activity" ? (
+            <ActivityPanel
+              error={activityError}
+              events={activityEvents}
+              loading={activityLoading}
+              onRefresh={() => void refreshActivity()}
+            />
+          ) : (
+            <>
+              <StatusStrip dashboard={dashboard} />
 
-          <ProjectList
-            loading={loading}
-            projects={filteredProjects}
-            registryMode={view === "registry"}
-            selectedId={selectedProject?.id ?? null}
-            onCopyPath={(project) => void handleCopyPath(project)}
-            onOpenFolder={(project) => void handleOpenFolder(project)}
-            onOpenTerminal={(project) => void handleOpenTerminal(project)}
-            onRemoveProject={(project) => void handleRemoveProject(project)}
-            onSelectProject={(project) => setSelectedId(project.id)}
-          />
+              <section className="stats" aria-label="Summary">
+                <Metric label="Projects" value={dashboard.summary.projects} />
+                <Metric label="Worktrees" value={dashboard.summary.worktrees} />
+                <Metric label="Services" value={dashboard.summary.services} />
+                <Metric label="Running" value={dashboard.summary.runningServices} />
+                <Metric label="Dirty" value={dashboard.summary.dirty} />
+                <Metric label="Missing" value={dashboard.summary.missing} />
+              </section>
+
+              <ProjectList
+                loading={loading}
+                projects={filteredProjects}
+                registryMode={view === "registry"}
+                selectedId={selectedProject?.id ?? null}
+                onCopyPath={(project) => void handleCopyPath(project)}
+                onOpenFolder={(project) => void handleOpenFolder(project)}
+                onOpenTerminal={(project) => void handleOpenTerminal(project)}
+                onRemoveProject={(project) => void handleRemoveProject(project)}
+                onSelectProject={(project) => setSelectedId(project.id)}
+              />
+            </>
+          )}
         </main>
 
         <Inspector
@@ -297,7 +353,7 @@ export function App() {
           onResizeStart={(event) => startInspectorResize(event, setInspectorWidth)}
           onServiceChanged={async (message) => {
             setNotice(message);
-            await refresh();
+            await refreshAfterOperation();
           }}
           onTabChange={setInspectorTab}
         />
@@ -308,7 +364,7 @@ export function App() {
         onOpenChange={setDialogOpen}
         onAdded={async () => {
           setDialogOpen(false);
-          await refresh();
+          await refreshAfterOperation();
         }}
       />
       <AddServiceDialog
@@ -319,7 +375,7 @@ export function App() {
         onAdded={async () => {
           setServiceDialogProject(null);
           setNotice("Service registered.");
-          await refresh();
+          await refreshAfterOperation();
         }}
       />
       <EditProjectDialog
@@ -330,7 +386,7 @@ export function App() {
         onSaved={async (projectName) => {
           setEditProject(null);
           setNotice(`Renamed project to ${projectName}.`);
-          await refresh();
+          await refreshAfterOperation();
         }}
       />
       <ConfirmDeleteDialog
@@ -351,7 +407,7 @@ export function App() {
             }
           }
           setConfirmAction(null);
-          await refresh();
+          await refreshAfterOperation();
         }}
       />
     </div>
@@ -411,6 +467,10 @@ function Sidebar({
         <Settings size={15} />
         Registry
       </button>
+      <button className={`source ${view === "activity" ? "active" : ""}`} onClick={() => onViewChange("activity")}>
+        <History size={15} />
+        Activity
+      </button>
 
       <p className="side-label">Tags</p>
       {availableTags.length === 0 ? (
@@ -462,6 +522,68 @@ function Metric({ label, value }: { label: string; value: number }) {
       <span>{label}</span>
       <strong>{value}</strong>
     </div>
+  );
+}
+
+function ActivityPanel({
+  error,
+  events,
+  loading,
+  onRefresh
+}: {
+  error: string | null;
+  events: ActivityEvent[];
+  loading: boolean;
+  onRefresh: () => void;
+}) {
+  return (
+    <section className="activity-panel" aria-label="Activity log">
+      <div className="activity-heading">
+        <div>
+          <h3>Recent Activity</h3>
+          <p>Console actions recorded on this machine.</p>
+        </div>
+        <Button disabled={loading} onClick={onRefresh}>
+          <RefreshCw size={14} />
+          Refresh
+        </Button>
+      </div>
+      {error ? <div className="error-banner compact">{error}</div> : null}
+      {loading ? (
+        <div className="empty-state compact">Loading activity...</div>
+      ) : events.length === 0 ? (
+        <div className="empty-state compact">No console actions have been recorded yet.</div>
+      ) : (
+        <div className="activity-list">
+          {events.map((event) => (
+            <article className="activity-row" key={event.id}>
+              <span className={`activity-dot ${event.status}`} aria-hidden="true" />
+              <div className="activity-main">
+                <div className="activity-title">
+                  <strong>{event.label}</strong>
+                  <Badge tone={event.status === "failed" ? "error" : "clean"}>
+                    {activityActionLabel(event.action)}
+                  </Badge>
+                </div>
+                <div className="activity-meta">
+                  <span>{event.projectName ?? "Unknown project"}</span>
+                  {event.target ? (
+                    <>
+                      <span aria-hidden="true">/</span>
+                      <span>{activityTargetLabel(event.targetType)}: {event.target}</span>
+                    </>
+                  ) : null}
+                </div>
+                {event.detail ? <div className="activity-detail mono">{event.detail}</div> : null}
+              </div>
+              <time className="activity-time" dateTime={event.createdAt} title={formatActivityFullTime(event.createdAt)}>
+                {formatActivityTime(event.createdAt)}
+              </time>
+            </article>
+          ))}
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -679,14 +801,20 @@ function WorktreePanel({
                 <div className="tree-top">
                   <strong>{worktree.branch ?? "detached"}</strong>
                   <span className="tree-badges">
-                    <Badge tone={worktree.clean ? "clean" : "dirty"}>
+                    <ExplainableBadge align="right" tone={worktree.clean ? "clean" : "dirty"} tooltip={worktreeChangeTooltip(worktree)}>
                       {worktree.clean ? "Clean" : `${worktree.dirtyFiles ?? 0} changed`}
-                    </Badge>
-                    <Badge tone={removalTone(worktree.removal?.level)}>{worktree.removal?.label ?? "Unknown"}</Badge>
-                    <Badge>{worktree.detached ? "Detached" : "Branch"}</Badge>
+                    </ExplainableBadge>
+                    <ExplainableBadge align="right" tone={removalTone(worktree.removal?.level)} tooltip={removalTooltip(worktree.removal)}>
+                      {worktree.removal?.label ?? "Unknown"}
+                    </ExplainableBadge>
+                    <ExplainableBadge align="right" tooltip={worktreeKindTooltip(worktree)}>
+                      {worktree.detached ? "Detached" : "Branch"}
+                    </ExplainableBadge>
                   </span>
                 </div>
-                <span className="worktree-origin">{worktreeOriginLabel(worktree)}</span>
+                <ExplainableText className="worktree-origin" tooltip={worktreeOriginTooltip(worktree)}>
+                  {worktreeOriginLabel(worktree)}
+                </ExplainableText>
                 <span className="mono">{worktree.path}</span>
                 {worktree.removal?.canDelete ? (
                   <span className="tree-actions">
@@ -768,13 +896,14 @@ function BranchPanel({
             <div className="branch-row" key={branch.name}>
               <div className="branch-main">
                 <strong>{branch.name}</strong>
-                <span className="branch-meta">
-                  {branch.current ? "current" : branch.merged ? "merged" : "unmerged"}
-                  {branch.usedByWorktree ? " · in worktree" : ""}
-                </span>
+                <ExplainableText className="branch-meta" tooltip={branchMetaTooltip(branch)}>
+                  {branchMetaLabel(branch)}
+                </ExplainableText>
               </div>
               <span className="branch-actions">
-                <Badge tone={removalTone(branch.removal.level)}>{branch.removal.label}</Badge>
+                <ExplainableBadge align="right" tone={removalTone(branch.removal.level)} tooltip={removalTooltip(branch.removal)}>
+                  {branch.removal.label}
+                </ExplainableBadge>
                 {branch.removal.canDelete ? (
                   <Button
                     size="icon"
@@ -937,8 +1066,16 @@ function ServicePanel({
                   <div className="service-title-row">
                     <strong>{service.name}</strong>
                     <span className="service-badges">
-                      <Badge tone={serviceStatusTone(service)}>{serviceStatusLabel(service)}</Badge>
-                      <Badge tone={service.startedByConsole ? "clean" : "neutral"}>{serviceKindLabel(service)}</Badge>
+                      <ExplainableBadge align="right" tone={serviceStatusTone(service)} tooltip={serviceStatusTooltip(service)}>
+                        {serviceStatusLabel(service)}
+                      </ExplainableBadge>
+                      <ExplainableBadge
+                        align="right"
+                        tone={service.startedByConsole ? "clean" : "neutral"}
+                        tooltip={serviceKindTooltip(service)}
+                      >
+                        {serviceKindLabel(service)}
+                      </ExplainableBadge>
                     </span>
                   </div>
                   <span className="service-command mono">{service.command}</span>
@@ -953,7 +1090,7 @@ function ServicePanel({
                 {service.portsStatus.length > 0 ? (
                   <div className="port-list">
                     {service.portsStatus.map((port) => (
-                      <span className="port-chip" key={port.port}>
+                      <span className="port-chip explainable" data-tooltip={portTooltip(port)} key={port.port}>
                         {port.port}
                         <em>{port.listening ? `listening${port.pid ? `:${port.pid}` : ""}` : "free"}</em>
                       </span>
@@ -1329,6 +1466,40 @@ function ConfirmDeleteDialog({
   );
 }
 
+function ExplainableBadge({
+  align = "center",
+  children,
+  tone = "neutral",
+  tooltip
+}: {
+  align?: "center" | "right";
+  children: ReactNode;
+  tone?: "neutral" | "clean" | "dirty" | "error";
+  tooltip: string;
+}) {
+  return (
+    <Badge className={`explainable ${align === "right" ? "tooltip-right" : ""}`} data-tooltip={tooltip} tone={tone}>
+      {children}
+    </Badge>
+  );
+}
+
+function ExplainableText({
+  children,
+  className,
+  tooltip
+}: {
+  children: ReactNode;
+  className?: string;
+  tooltip: string;
+}) {
+  return (
+    <span className={`${className ?? ""} explainable text-hint`} data-tooltip={tooltip}>
+      {children}
+    </span>
+  );
+}
+
 function badgeTone(status: ProjectSnapshot["status"] | StatusFilter): "neutral" | "clean" | "dirty" | "error" {
   if (status === "clean") return "clean";
   if (status === "dirty") return "dirty";
@@ -1346,15 +1517,56 @@ function labelStatus(status: ProjectSnapshot["status"] | StatusFilter) {
 
 function viewTitle(view: SidebarView, tagFilter: string | null) {
   if (tagFilter) return tagFilter;
+  if (view === "activity") return "Activity";
   if (view === "worktrees") return "Worktrees";
   if (view === "registry") return "Registry";
   return "Projects";
 }
 
 function viewSubtitle(view: SidebarView) {
+  if (view === "activity") return "Recent operations performed through this console.";
   if (view === "worktrees") return "Registered repositories grouped by local worktree activity.";
   if (view === "registry") return "Manage registered repositories and remove entries you no longer track.";
   return "Registered repositories, local branches, and worktree activity.";
+}
+
+function activityActionLabel(actionName: string) {
+  const labels: Record<string, string> = {
+    "branch.delete": "Branch",
+    "project.add": "Project",
+    "project.remove": "Project",
+    "project.update": "Project",
+    "service.add": "Service",
+    "service.remove": "Service",
+    "service.restart": "Service",
+    "service.start": "Service",
+    "service.stop": "Service",
+    "worktree.remove": "Worktree"
+  };
+  return labels[actionName] ?? "Action";
+}
+
+function activityTargetLabel(targetType: ActivityEvent["targetType"]) {
+  if (targetType === "branch") return "branch";
+  if (targetType === "service") return "service";
+  if (targetType === "worktree") return "worktree";
+  return "project";
+}
+
+function formatActivityTime(isoTime: string) {
+  return new Intl.DateTimeFormat(undefined, {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit"
+  }).format(new Date(isoTime));
+}
+
+function formatActivityFullTime(isoTime: string) {
+  return new Intl.DateTimeFormat(undefined, {
+    dateStyle: "medium",
+    timeStyle: "medium"
+  }).format(new Date(isoTime));
 }
 
 function action(event: React.MouseEvent, callback: () => void) {
@@ -1395,6 +1607,78 @@ function removalTone(level: RemovalAssessment["level"] | undefined): "neutral" |
   if (level === "review") return "dirty";
   if (level === "blocked") return "error";
   return "neutral";
+}
+
+function removalTooltip(removal: RemovalAssessment | undefined) {
+  if (!removal) return "No safety assessment was available for this item.";
+  const scope =
+    removal.level === "safe"
+      ? "Safe action"
+      : removal.level === "review"
+        ? "Needs review"
+        : "Blocked";
+  return `${scope}. ${removal.reasons.join(" ")}`;
+}
+
+function branchMetaLabel(branch: BranchInfo) {
+  const state = branch.current ? "current" : branch.merged ? "merged" : "unmerged";
+  return `${state}${branch.usedByWorktree ? " · in worktree" : ""}`;
+}
+
+function branchMetaTooltip(branch: BranchInfo) {
+  const details = [
+    branch.current
+      ? "This is the currently checked-out branch in the registered project."
+      : branch.merged
+        ? "Git reports this branch is merged into the current HEAD."
+        : "Git reports this branch is not merged into the current HEAD.",
+    branch.usedByWorktree ? "A local worktree is using it, so branch deletion is blocked." : "No registered worktree is using it."
+  ];
+  return details.join(" ");
+}
+
+function worktreeChangeTooltip(worktree: WorktreeInfo) {
+  if (worktree.clean) return "No local uncommitted changes were reported for this worktree.";
+  return `${worktree.dirtyFiles ?? 0} changed file(s). Click this worktree to open the changes panel.`;
+}
+
+function worktreeKindTooltip(worktree: WorktreeInfo) {
+  if (worktree.detached) return "Detached HEAD worktree: it is checked out at a commit instead of a branch name.";
+  return "Branch worktree: this worktree is attached to a local branch.";
+}
+
+function worktreeOriginTooltip(worktree: WorktreeInfo) {
+  if (worktree.branch) return `This worktree is checked out on ${worktree.branch}${worktree.shortHead ? ` at ${worktree.shortHead}` : ""}.`;
+  if ((worktree.baseRefs ?? []).length > 0) {
+    return `Detached worktree. Git says this commit is contained by: ${worktree.baseRefs?.join(", ")}.`;
+  }
+  return worktree.shortHead ? `Detached worktree at commit ${worktree.shortHead}.` : "Detached worktree with no branch metadata.";
+}
+
+function serviceStatusTooltip(service: ServiceSnapshot) {
+  if (service.status === "running") {
+    return service.startedByConsole
+      ? "This service was started from this console and is currently running."
+      : "The configured health check or port says this service is already running outside this console.";
+  }
+  if (service.status === "port-occupied") {
+    return "A configured port is already listening, but this console did not start that process.";
+  }
+  if (service.status === "starting") return "The console started the process, but the health check is not passing yet.";
+  if (service.status === "error") return "The service check reported an error.";
+  if (service.ports.length === 0 && !service.healthUrl) return "One-shot task. It is ready to run and does not keep a port open.";
+  return "No configured port or health check is currently active.";
+}
+
+function serviceKindTooltip(service: ServiceSnapshot) {
+  if (service.ports.length === 0 && !service.healthUrl) return "Task mode: click Run to execute it once; Stop and Restart are hidden.";
+  if (service.startedByConsole) return "Console-managed process: Stop and Restart are available here.";
+  return "External process: the console can detect it, but will not stop or restart it unless it started it.";
+}
+
+function portTooltip(port: ServiceSnapshot["portsStatus"][number]) {
+  if (port.listening) return `Port ${port.port} is listening${port.pid ? ` on PID ${port.pid}` : ""}.`;
+  return `Port ${port.port} is free.`;
 }
 
 function worktreeOriginLabel(worktree: ProjectSnapshot["worktrees"][number]) {

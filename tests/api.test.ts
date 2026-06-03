@@ -6,6 +6,7 @@ import request from "supertest";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { createApp } from "../src/server/app";
+import { ActivityLog } from "../src/server/activity";
 import { ProjectRegistry } from "../src/server/registry";
 
 let tempDir: string;
@@ -19,8 +20,21 @@ afterEach(async () => {
 });
 
 describe("createApp", () => {
-  it("registers projects and returns dashboard snapshots", async () => {
+  it("returns API health without building a dashboard snapshot", async () => {
     const app = createApp({
+      activityLog: new ActivityLog(join(tempDir, "activity.json")),
+      registry: new ProjectRegistry(join(tempDir, "projects.json"))
+    });
+
+    const response = await request(app).get("/api/health").expect(200);
+
+    expect(response.body).toEqual({ ok: true });
+  });
+
+  it("registers projects and returns dashboard snapshots", async () => {
+    const activityLog = new ActivityLog(join(tempDir, "activity.json"));
+    const app = createApp({
+      activityLog,
       registry: new ProjectRegistry(join(tempDir, "projects.json"))
     });
 
@@ -63,10 +77,27 @@ describe("createApp", () => {
       id: addResponse.body.id,
       name: "Renamed repo"
     });
+
+    const activityResponse = await request(app).get("/api/activity").expect(200);
+    expect(activityResponse.body.events).toEqual([
+      expect.objectContaining({
+        action: "project.update",
+        label: "Updated project",
+        projectName: "Renamed repo",
+        target: "Renamed repo"
+      }),
+      expect.objectContaining({
+        action: "project.add",
+        label: "Added project",
+        projectName: "Missing repo",
+        target: "Missing repo"
+      })
+    ]);
   });
 
   it("registers project services and returns service snapshots", async () => {
     const app = createApp({
+      activityLog: new ActivityLog(join(tempDir, "activity.json")),
       registry: new ProjectRegistry(join(tempDir, "projects.json")),
       serviceManager: {
         snapshot: async (_projectId, service) => ({
@@ -135,6 +166,7 @@ describe("createApp", () => {
 
   it("returns a locally selected folder path", async () => {
     const app = createApp({
+      activityLog: new ActivityLog(join(tempDir, "activity.json")),
       registry: new ProjectRegistry(join(tempDir, "projects.json")),
       selectFolder: async () => join(tempDir, "chosen")
     });

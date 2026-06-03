@@ -113,3 +113,23 @@ export type DashboardResponse = {
   projects: ProjectSnapshot[];
   summary: DashboardSummary;
 };
+
+export type ActivityTargetType = "project" | "worktree" | "branch" | "service";
+
+export type ActivityEvent = {
+  id: string;
+  createdAt: string;
+  action: string;
+  label: string;
+  status: "success" | "failed";
+  projectId?: string | null;
+  projectName?: string | null;
+  projectPath?: string | null;
+  targetType?: ActivityTargetType | null;
+  target?: string | null;
+  detail?: string | null;
+};
+
+export type ActivityResponse = {
+  events: ActivityEvent[];
+};
