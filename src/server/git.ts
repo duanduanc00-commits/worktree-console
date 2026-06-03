@@ -80,6 +80,10 @@ export function parseWorktreeList(output: string): WorktreeInfo[] {
 }
 
 export function parseShortStatusChanges(output: string): WorktreeChange[] {
+  if (output.includes("\0")) {
+    return parseNulShortStatusChanges(output);
+  }
+
   return output
     .split(/\r?\n/)
     .map((line) => line.trimEnd())
@@ -93,6 +97,30 @@ export function parseShortStatusChanges(output: string): WorktreeChange[] {
         raw
       };
     });
+}
+
+function parseNulShortStatusChanges(output: string): WorktreeChange[] {
+  const records = output.split("\0").filter(Boolean);
+  const changes: WorktreeChange[] = [];
+
+  for (let index = 0; index < records.length; index += 1) {
+    const raw = records[index];
+    if (raw.length < 4) continue;
+
+    const status = raw.slice(0, 2);
+    const code = status.trim() || status;
+    changes.push({
+      code,
+      path: raw.slice(3),
+      raw
+    });
+
+    if (status.includes("R") || status.includes("C")) {
+      index += 1;
+    }
+  }
+
+  return changes;
 }
 
 export async function pathExists(path: string): Promise<boolean> {
@@ -119,7 +147,7 @@ export async function readBranchStatus(path: string): Promise<BranchStatus> {
 }
 
 export async function readWorktreeChanges(path: string): Promise<WorktreeChange[]> {
-  const { stdout } = await git(path, ["status", "--short", "--untracked-files=all"]);
+  const { stdout } = await git(path, ["status", "--short", "--untracked-files=all", "-z"]);
   return parseShortStatusChanges(stdout);
 }
 

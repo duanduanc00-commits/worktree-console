@@ -333,6 +333,31 @@ describe("createApp", () => {
     expect(response.body.diff).toContain("+line 3");
     expect(response.body.truncated).toBe(false);
   });
+
+  it("returns a non-empty diff for changed files with non-ASCII paths", async () => {
+    const repoPath = join(tempDir, "repo");
+    await createGitRepo(repoPath);
+    await writeLines(repoPath, "src/café.txt", 2);
+    await git(repoPath, ["add", "src/café.txt"]);
+    await git(repoPath, ["commit", "-m", "Add cafe file"]);
+    await writeLines(repoPath, "src/café.txt", 4);
+
+    const registry = new ProjectRegistry(join(tempDir, "projects.json"));
+    const app = createApp({
+      activityLog: new ActivityLog(join(tempDir, "activity.json")),
+      registry
+    });
+    const project = await registry.addProject({ name: "Repo", path: repoPath, tags: [] });
+
+    const response = await request(app)
+      .get(`/api/projects/${project.id}/worktrees/diff`)
+      .query({ path: repoPath, file: "src/café.txt" })
+      .expect(200);
+
+    expect(response.body.filePath).toBe("src/café.txt");
+    expect(response.body.diff).toContain("diff --git");
+    expect(response.body.diff).toContain("+line 4");
+  });
 });
 
 async function createGitRepo(repoPath: string): Promise<void> {

@@ -86,6 +86,15 @@ describe("parseShortStatusChanges", () => {
       { code: "??", path: "tests/git.test.ts", raw: "?? tests/git.test.ts" }
     ]);
   });
+
+  it("parses nul-delimited status paths without quoted pseudo-paths", () => {
+    const output = " M src/café.txt\0?? docs/说明.md\0";
+
+    expect(parseShortStatusChanges(output)).toEqual([
+      { code: "M", path: "src/café.txt", raw: " M src/café.txt" },
+      { code: "??", path: "docs/说明.md", raw: "?? docs/说明.md" }
+    ]);
+  });
 });
 
 describe("buildRecentCommitArgs", () => {
