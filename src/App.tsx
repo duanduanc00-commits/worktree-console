@@ -23,6 +23,7 @@ import {
 import {
   addProject,
   addService,
+  addServiceGroup,
   deleteBranch,
   deleteWorktree,
   getActivity,
@@ -34,9 +35,13 @@ import {
   openProjectTerminal,
   removeProject,
   removeService,
+  removeServiceGroup,
+  restartServiceGroup,
   restartService,
   selectFolder,
+  startServiceGroup,
   startService,
+  stopServiceGroup,
   stopService,
   updateProjectName
 } from "./lib/api";
@@ -49,6 +54,7 @@ import {
   serviceStatusTone,
   serviceUrl
 } from "./lib/service-ui";
+import { serviceGroupStatusLabel, serviceGroupStatusTone } from "./lib/service-groups-ui";
 import { healthIssueLabel, healthIssueTone } from "./lib/health-ui";
 import { diffLineTone } from "./lib/diff-ui";
 import type {
@@ -59,6 +65,9 @@ import type {
   ProjectSnapshot,
   RecentCommit,
   RemovalAssessment,
+  ServiceGroupAction,
+  ServiceGroupActionResponse,
+  ServiceGroupSnapshot,
   ServiceSnapshot,
   WorktreeDiffResponse,
   WorktreeInfo
@@ -1269,9 +1278,19 @@ function ServicePanel({
   onServiceChanged: (message: string) => Promise<void>;
 }) {
   const [busyServiceId, setBusyServiceId] = useState<string | null>(null);
+  const [busyGroup, setBusyGroup] = useState<{ id: string; action: ServiceGroupAction | "delete" } | null>(null);
+  const [groupDialogOpen, setGroupDialogOpen] = useState(false);
+  const [groupErrors, setGroupErrors] = useState<Record<string, string>>({});
   const [expandedLogs, setExpandedLogs] = useState<string | null>(null);
   const [logLines, setLogLines] = useState<Record<string, string[]>>({});
   const [error, setError] = useState<string | null>(null);
+  const serviceGroups = project.serviceGroups ?? [];
+
+  useEffect(() => {
+    setBusyGroup(null);
+    setGroupDialogOpen(false);
+    setGroupErrors({});
+  }, [project.id]);
 
   async function runServiceAction(service: ServiceSnapshot, actionName: "start" | "stop" | "restart") {
     setBusyServiceId(service.id);
@@ -1294,6 +1313,54 @@ function ServicePanel({
     }
   }
 
+  async function runGroupAction(group: ServiceGroupSnapshot, actionName: ServiceGroupAction) {
+    setBusyGroup({ id: group.id, action: actionName });
+    setGroupErrors((current) => {
+      const next = { ...current };
+      delete next[group.id];
+      return next;
+    });
+    try {
+      const response =
+        actionName === "start"
+          ? await startServiceGroup(project.id, group.id)
+          : actionName === "stop"
+            ? await stopServiceGroup(project.id, group.id)
+            : await restartServiceGroup(project.id, group.id);
+      const errorSummary = serviceGroupActionErrorSummary(response);
+      if (errorSummary) {
+        setGroupErrors((current) => ({ ...current, [group.id]: errorSummary }));
+      }
+      await onServiceChanged(serviceGroupActionNotice(response));
+    } catch (caught) {
+      setGroupErrors((current) => ({ ...current, [group.id]: (caught as Error).message }));
+    } finally {
+      setBusyGroup(null);
+    }
+  }
+
+  async function deleteGroup(group: ServiceGroupSnapshot) {
+    const confirmed = window.confirm(
+      `Remove service group "${group.name}"? The individual service registrations will remain.`
+    );
+    if (!confirmed) return;
+
+    setBusyGroup({ id: group.id, action: "delete" });
+    setGroupErrors((current) => {
+      const next = { ...current };
+      delete next[group.id];
+      return next;
+    });
+    try {
+      await removeServiceGroup(project.id, group.id);
+      await onServiceChanged(`Removed service group ${group.name}.`);
+    } catch (caught) {
+      setGroupErrors((current) => ({ ...current, [group.id]: (caught as Error).message }));
+    } finally {
+      setBusyGroup(null);
+    }
+  }
+
   async function refreshLogs(service: ServiceSnapshot) {
     setBusyServiceId(service.id);
     setError(null);
@@ -1312,12 +1379,93 @@ function ServicePanel({
     <section className="section service-panel">
       <div className="section-heading">
         <h3>Services</h3>
-        <Button onClick={() => onAddService(project)}>
-          <Plus size={14} />
-          Add Service
-        </Button>
+        <div className="section-actions">
+          <Button
+            disabled={project.services.length === 0}
+            title={project.services.length === 0 ? "Add a service before creating a group" : "Add service group"}
+            onClick={() => setGroupDialogOpen(true)}
+          >
+            <Plus size={14} />
+            Add Service Group
+          </Button>
+          <Button onClick={() => onAddService(project)}>
+            <Plus size={14} />
+            Add Service
+          </Button>
+        </div>
       </div>
       {error ? <div className="error-banner compact">{error}</div> : null}
+      <div className="service-groups">
+        <div className="service-subheading">Service Groups</div>
+        {project.services.length === 0 ? (
+          <div className="empty-state compact">Add services before grouping them.</div>
+        ) : serviceGroups.length === 0 ? (
+          <div className="empty-state compact">No service groups yet.</div>
+        ) : (
+          <div className="service-group-list">
+            {serviceGroups.map((group) => {
+              const busy = busyGroup?.id === group.id;
+              const groupError = groupErrors[group.id];
+              return (
+                <article className="service-group-card" key={group.id}>
+                  <div className="service-group-top">
+                    <div className="service-group-main">
+                      <strong title={group.name}>{group.name}</strong>
+                    </div>
+                    <span className="service-badges">
+                      <Badge tone={serviceGroupStatusTone(group.status)}>
+                        {serviceGroupStatusLabel(group.status)}
+                      </Badge>
+                      <Badge>{serviceCountLabel(group.serviceIds.length)}</Badge>
+                    </span>
+                  </div>
+
+                  <div className="service-member-list" aria-label={`${group.name} services`}>
+                    {group.services.length === 0 ? (
+                      <span className="service-member-chip muted">
+                        <span>No services</span>
+                      </span>
+                    ) : (
+                      group.services.map((service) => (
+                        <span className="service-member-chip" key={service.id} title={service.name}>
+                          <span>{service.name}</span>
+                        </span>
+                      ))
+                    )}
+                  </div>
+
+                  <div className="service-group-actions">
+                    <Button disabled={busy} title="Start group" onClick={() => void runGroupAction(group, "start")}>
+                      <Play size={14} />
+                      {busyGroup?.id === group.id && busyGroup.action === "start" ? "Starting..." : "Start Group"}
+                    </Button>
+                    <Button disabled={busy} title="Stop group" onClick={() => void runGroupAction(group, "stop")}>
+                      <Square size={13} />
+                      {busyGroup?.id === group.id && busyGroup.action === "stop" ? "Stopping..." : "Stop Group"}
+                    </Button>
+                    <Button disabled={busy} title="Restart group" onClick={() => void runGroupAction(group, "restart")}>
+                      <RotateCcw size={14} />
+                      {busyGroup?.id === group.id && busyGroup.action === "restart" ? "Restarting..." : "Restart Group"}
+                    </Button>
+                    <Button
+                      aria-label={`Remove service group ${group.name}`}
+                      disabled={busy}
+                      size="icon"
+                      title={`Remove service group ${group.name}`}
+                      variant="ghost"
+                      onClick={() => void deleteGroup(group)}
+                    >
+                      <Trash2 size={14} />
+                    </Button>
+                  </div>
+                  {groupError ? <div className="error-banner compact service-group-error">{groupError}</div> : null}
+                </article>
+              );
+            })}
+          </div>
+        )}
+      </div>
+      <div className="service-subheading">Individual Services</div>
       {project.services.length === 0 ? (
         <div className="empty-state compact">No services registered for this project.</div>
       ) : (
@@ -1422,8 +1570,40 @@ function ServicePanel({
           })}
         </div>
       )}
+      <AddServiceGroupDialog
+        open={groupDialogOpen}
+        project={project}
+        onOpenChange={setGroupDialogOpen}
+        onAdded={async (groupName) => {
+          setGroupDialogOpen(false);
+          await onServiceChanged(`Added service group ${groupName}.`);
+        }}
+      />
     </section>
   );
+}
+
+function serviceCountLabel(count: number) {
+  return `${count} service${count === 1 ? "" : "s"}`;
+}
+
+function serviceGroupActionNotice(response: ServiceGroupActionResponse) {
+  const actionLabel =
+    response.action === "start" ? "Started group" : response.action === "stop" ? "Stopped group" : "Restarted group";
+  if (response.errors.length === 0) {
+    return `${actionLabel} ${response.groupName}.`;
+  }
+  return `${actionLabel} ${response.groupName} with ${response.errors.length} failed.`;
+}
+
+function serviceGroupActionErrorSummary(response: ServiceGroupActionResponse) {
+  if (response.errors.length === 0) return null;
+  const details = response.errors
+    .slice(0, 3)
+    .map((result) => `${result.serviceName}: ${result.error ?? "failed"}`)
+    .join("; ");
+  const remainder = response.errors.length > 3 ? `; +${response.errors.length - 3} more` : "";
+  return `${response.errors.length} ${response.errors.length === 1 ? "service" : "services"} failed: ${details}${remainder}`;
 }
 
 function AddProjectDialog({
@@ -1570,6 +1750,109 @@ function EditProjectDialog({
           </Button>
           <Button disabled={submitting} type="submit" variant="primary">
             {submitting ? "Saving..." : "Save Name"}
+          </Button>
+        </footer>
+      </form>
+    </Dialog>
+  );
+}
+
+function AddServiceGroupDialog({
+  onAdded,
+  onOpenChange,
+  open,
+  project
+}: {
+  project: ProjectSnapshot;
+  open: boolean;
+  onAdded: (groupName: string) => Promise<void>;
+  onOpenChange: (open: boolean) => void;
+}) {
+  const [name, setName] = useState("");
+  const [selectedServiceIds, setSelectedServiceIds] = useState<string[]>([]);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (open) {
+      setName("");
+      setSelectedServiceIds([]);
+      setSubmitting(false);
+      setError(null);
+    }
+  }, [open, project.id]);
+
+  async function handleSubmit(event: FormEvent) {
+    event.preventDefault();
+    const groupName = name.trim();
+    const availableServiceIds = new Set(project.services.map((service) => service.id));
+    const serviceIds = selectedServiceIds.filter((serviceId) => availableServiceIds.has(serviceId));
+
+    if (!groupName) {
+      setError("Group name is required.");
+      return;
+    }
+    if (serviceIds.length === 0) {
+      setError("Select at least one service.");
+      return;
+    }
+
+    setSubmitting(true);
+    setError(null);
+    try {
+      const group = await addServiceGroup(project.id, { name: groupName, serviceIds });
+      await onAdded(group.name);
+    } catch (caught) {
+      setError((caught as Error).message);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  function toggleService(serviceId: string) {
+    setSelectedServiceIds((current) =>
+      current.includes(serviceId)
+        ? current.filter((candidate) => candidate !== serviceId)
+        : [...current, serviceId]
+    );
+  }
+
+  return (
+    <Dialog open={open} title="Add Service Group" onOpenChange={onOpenChange}>
+      <form className="project-form" onSubmit={(event) => void handleSubmit(event)}>
+        <label>
+          <span>Group name</span>
+          <Input required placeholder="Core services" value={name} onChange={(event) => setName(event.target.value)} />
+        </label>
+        <div className="service-checklist-field">
+          <span>Services</span>
+          {project.services.length === 0 ? (
+            <div className="empty-state compact">No services registered.</div>
+          ) : (
+            <div className="service-checklist">
+              {project.services.map((service) => (
+                <label className="service-check-option" key={service.id}>
+                  <input
+                    checked={selectedServiceIds.includes(service.id)}
+                    type="checkbox"
+                    onChange={() => toggleService(service.id)}
+                  />
+                  <span className="service-check-text">
+                    <strong>{service.name}</strong>
+                    <span className="mono">{service.command}</span>
+                  </span>
+                </label>
+              ))}
+            </div>
+          )}
+        </div>
+        {error ? <div className="error-banner compact">{error}</div> : null}
+        <footer className="dialog-footer">
+          <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>
+            Cancel
+          </Button>
+          <Button disabled={submitting || project.services.length === 0} type="submit" variant="primary">
+            {submitting ? "Adding..." : "Add Group"}
           </Button>
         </footer>
       </form>
@@ -1822,6 +2105,12 @@ function activityActionLabel(actionName: string) {
     "project.remove": "Project",
     "project.update": "Project",
     "service.add": "Service",
+    "service-group.add": "Service Group",
+    "service-group.remove": "Service Group",
+    "service-group.restart": "Service Group",
+    "service-group.start": "Service Group",
+    "service-group.stop": "Service Group",
+    "service-group.update": "Service Group",
     "service.remove": "Service",
     "service.restart": "Service",
     "service.start": "Service",
