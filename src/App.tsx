@@ -202,6 +202,9 @@ export function App() {
   }
 
   function handleInspectHealthIssue(issue: HealthIssue) {
+    setQuery("");
+    setFilter("all");
+    setTagFilter(null);
     setSelectedId(issue.projectId);
     if (issue.kind === "stopped-service" || issue.kind === "occupied-port") {
       setInspectorTab("services");
