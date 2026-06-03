@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useState, type CSSProperties, type PointerEvent, type ReactNode } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent, type ReactNode } from "react";
 import {
   Activity,
   Copy,
@@ -29,6 +29,7 @@ import {
   getDashboard,
   getProjectCommits,
   getServiceLogs,
+  getWorktreeDiff,
   openProjectFolder,
   openProjectTerminal,
   removeProject,
@@ -49,6 +50,7 @@ import {
   serviceUrl
 } from "./lib/service-ui";
 import { healthIssueLabel, healthIssueTone } from "./lib/health-ui";
+import { diffLineTone } from "./lib/diff-ui";
 import type {
   ActivityEvent,
   BranchInfo,
@@ -58,6 +60,7 @@ import type {
   RecentCommit,
   RemovalAssessment,
   ServiceSnapshot,
+  WorktreeDiffResponse,
   WorktreeInfo
 } from "./shared/types";
 import { Badge } from "./components/ui/badge";
@@ -926,19 +929,74 @@ function WorktreePanel({
           )}
         </div>
       </div>
-      {selectedWorktree ? <WorktreeChanges onClose={() => setSelectedPath(null)} worktree={selectedWorktree} /> : null}
+      {selectedWorktree ? (
+        <WorktreeChanges projectId={project.id} onClose={() => setSelectedPath(null)} worktree={selectedWorktree} />
+      ) : null}
     </section>
   );
 }
 
 function WorktreeChanges({
   onClose,
+  projectId,
   worktree
 }: {
   onClose: () => void;
+  projectId: string;
   worktree: NonNullable<ProjectSnapshot["worktrees"][number]>;
 }) {
   const changes = worktree.changes ?? [];
+  const [selectedFile, setSelectedFile] = useState<string | null>(null);
+  const [diff, setDiff] = useState<WorktreeDiffResponse | null>(null);
+  const [diffLoading, setDiffLoading] = useState(false);
+  const [diffError, setDiffError] = useState<string | null>(null);
+  const [copiedPath, setCopiedPath] = useState<string | null>(null);
+  const diffRequestId = useRef(0);
+
+  useEffect(() => {
+    diffRequestId.current += 1;
+    setSelectedFile(null);
+    setDiff(null);
+    setDiffLoading(false);
+    setDiffError(null);
+    setCopiedPath(null);
+
+    return () => {
+      diffRequestId.current += 1;
+    };
+  }, [projectId, worktree.path]);
+
+  async function loadDiff(filePath: string) {
+    const requestId = diffRequestId.current + 1;
+    diffRequestId.current = requestId;
+    setSelectedFile(filePath);
+    setDiff(null);
+    setDiffLoading(true);
+    setDiffError(null);
+    setCopiedPath(null);
+
+    try {
+      const nextDiff = await getWorktreeDiff(projectId, worktree.path, filePath);
+      if (diffRequestId.current !== requestId) return;
+      setDiff(nextDiff);
+    } catch (caught) {
+      if (diffRequestId.current !== requestId) return;
+      setDiffError((caught as Error).message);
+    } finally {
+      if (diffRequestId.current === requestId) {
+        setDiffLoading(false);
+      }
+    }
+  }
+
+  async function copySelectedPath() {
+    if (!selectedFile) return;
+    await navigator.clipboard.writeText(selectedFile);
+    setCopiedPath(selectedFile);
+    window.setTimeout(() => {
+      setCopiedPath((current) => (current === selectedFile ? null : current));
+    }, 1600);
+  }
 
   return (
     <section className="worktree-detail">
@@ -957,16 +1015,67 @@ function WorktreeChanges({
       {changes.length === 0 ? (
         <div className="empty-state compact">No local changes in this worktree.</div>
       ) : (
-        <div className="change-list">
-          {changes.map((change) => (
-            <div className="change-row" key={`${change.code}-${change.path}`}>
-              <span className={`change-code ${changeTone(change.code)}`}>{change.code}</span>
-              <span className="mono">{change.path}</span>
-            </div>
-          ))}
-        </div>
+        <>
+          <div className="change-list">
+            {changes.map((change) => (
+              <button
+                className={`change-row ${selectedFile === change.path ? "selected" : ""}`}
+                key={`${change.code}-${change.path}`}
+                onClick={() => void loadDiff(change.path)}
+                type="button"
+              >
+                <span className={`change-code ${changeTone(change.code)}`}>{change.code}</span>
+                <span className="mono">{change.path}</span>
+              </button>
+            ))}
+          </div>
+          <div className="diff-section" aria-live="polite">
+            {selectedFile ? (
+              <div className="diff-heading">
+                <div className="diff-file">
+                  <strong>{selectedFile}</strong>
+                  {diff?.truncated ? (
+                    <span className="diff-note">Showing a bounded preview of {diff.lineCount} diff lines.</span>
+                  ) : null}
+                </div>
+                <span className="detail-actions">
+                  {diff?.truncated ? <Badge tone="dirty">Truncated</Badge> : null}
+                  <Button title="Copy selected file path" onClick={() => void copySelectedPath()}>
+                    <Copy size={13} />
+                    {copiedPath === selectedFile ? "Copied" : "Copy path"}
+                  </Button>
+                </span>
+              </div>
+            ) : null}
+            {diffLoading ? (
+              <div className="empty-state compact">Loading diff...</div>
+            ) : diffError ? (
+              <div className="error-banner compact">{diffError}</div>
+            ) : diff ? (
+              <DiffPreview diff={diff} />
+            ) : (
+              <div className="empty-state compact">Select a changed file to preview its diff.</div>
+            )}
+          </div>
+        </>
       )}
     </section>
+  );
+}
+
+function DiffPreview({ diff }: { diff: WorktreeDiffResponse }) {
+  if (diff.diff.trim().length === 0) {
+    return <div className="empty-state compact">No text diff available for this file.</div>;
+  }
+
+  return (
+    <pre className="diff-preview" aria-label={`Diff preview for ${diff.filePath}`}>
+      {diff.diff.split(/\r?\n/).map((line, index) => (
+        <span className={`diff-line ${diffLineTone(line)}`} key={index}>
+          {line.length === 0 ? " " : line}
+        </span>
+      ))}
+    </pre>
   );
 }
 

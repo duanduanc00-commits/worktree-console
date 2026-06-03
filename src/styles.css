@@ -964,6 +964,7 @@ h1 {
   top: 0;
   min-width: 0;
   margin-top: 24px;
+  overflow: hidden;
   border: 1px solid rgba(0, 122, 255, 0.18);
   border-radius: 9px;
   background: rgba(255, 255, 255, 0.86);
@@ -1025,10 +1026,21 @@ h1 {
   display: grid;
   grid-template-columns: 34px minmax(0, 1fr);
   align-items: center;
+  width: 100%;
   min-height: 32px;
+  border: 0;
   border-bottom: 1px solid var(--border);
+  background: transparent;
+  color: inherit;
   padding: 0 9px;
   gap: 8px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.change-row:hover,
+.change-row.selected {
+  background: var(--accent-soft);
 }
 
 .change-row:last-child {
@@ -1064,6 +1076,89 @@ h1 {
 .change-code.renamed {
   background: var(--accent-soft);
   color: #064f99;
+}
+
+.diff-section {
+  display: grid;
+  min-width: 0;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.diff-heading {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  min-width: 0;
+  gap: 8px;
+}
+
+.diff-file {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.diff-file strong {
+  overflow: hidden;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.diff-note {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.diff-section .error-banner {
+  margin-bottom: 0;
+}
+
+.diff-preview {
+  display: block;
+  max-width: 100%;
+  max-height: 360px;
+  overflow: auto;
+  margin: 0;
+  border-radius: 8px;
+  background: rgba(29, 29, 31, 0.94);
+  color: #f5f5f7;
+  padding: 10px 0;
+  font-family: "SF Mono", ui-monospace, Menlo, Consolas, "Liberation Mono", monospace;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.diff-line {
+  display: block;
+  min-width: max-content;
+  padding: 0 10px;
+  white-space: pre;
+}
+
+.diff-line.added {
+  background: rgba(52, 199, 89, 0.14);
+  color: #b9f6c8;
+}
+
+.diff-line.removed {
+  background: rgba(255, 59, 48, 0.14);
+  color: #ffb5ae;
+}
+
+.diff-line.hunk {
+  background: rgba(0, 122, 255, 0.16);
+  color: #9dccff;
+}
+
+.diff-line.header {
+  color: #d1d1d6;
+  font-weight: 700;
+}
+
+.diff-line.context {
+  color: #f5f5f7;
 }
 
 .branch-list {
@@ -1431,6 +1526,14 @@ h1 {
   .worktree-detail {
     position: static;
     margin-top: 0;
+  }
+
+  .diff-heading {
+    grid-template-columns: 1fr;
+  }
+
+  .diff-heading .detail-actions {
+    justify-content: flex-start;
   }
 }
 
