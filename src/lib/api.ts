@@ -5,6 +5,8 @@ import type {
   RecentCommit,
   RegisteredProject,
   RegisteredService,
+  RegisteredServiceGroup,
+  ServiceGroupActionResponse,
   ServiceSnapshot,
   WorktreeDiffResponse
 } from "../shared/types";
@@ -22,6 +24,13 @@ export type AddServicePayload = {
   ports: number[];
   healthUrl?: string | null;
 };
+
+export type AddServiceGroupPayload = {
+  name: string;
+  serviceIds: string[];
+};
+
+export type UpdateServiceGroupPayload = Partial<AddServiceGroupPayload>;
 
 export async function getDashboard(): Promise<DashboardResponse> {
   return request<DashboardResponse>("/api/projects");
@@ -102,6 +111,49 @@ export async function addService(projectId: string, payload: AddServicePayload):
 
 export async function removeService(projectId: string, serviceId: string): Promise<void> {
   await request<void>(`/api/projects/${projectId}/services/${serviceId}`, { method: "DELETE" });
+}
+
+export async function addServiceGroup(
+  projectId: string,
+  payload: AddServiceGroupPayload
+): Promise<RegisteredServiceGroup> {
+  return request<RegisteredServiceGroup>(`/api/projects/${projectId}/service-groups`, {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+}
+
+export async function updateServiceGroup(
+  projectId: string,
+  groupId: string,
+  payload: UpdateServiceGroupPayload
+): Promise<RegisteredServiceGroup> {
+  return request<RegisteredServiceGroup>(`/api/projects/${projectId}/service-groups/${groupId}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload)
+  });
+}
+
+export async function removeServiceGroup(projectId: string, groupId: string): Promise<void> {
+  await request<void>(`/api/projects/${projectId}/service-groups/${groupId}`, { method: "DELETE" });
+}
+
+export async function startServiceGroup(projectId: string, groupId: string): Promise<ServiceGroupActionResponse> {
+  return request<ServiceGroupActionResponse>(`/api/projects/${projectId}/service-groups/${groupId}/start`, {
+    method: "POST"
+  });
+}
+
+export async function stopServiceGroup(projectId: string, groupId: string): Promise<ServiceGroupActionResponse> {
+  return request<ServiceGroupActionResponse>(`/api/projects/${projectId}/service-groups/${groupId}/stop`, {
+    method: "POST"
+  });
+}
+
+export async function restartServiceGroup(projectId: string, groupId: string): Promise<ServiceGroupActionResponse> {
+  return request<ServiceGroupActionResponse>(`/api/projects/${projectId}/service-groups/${groupId}/restart`, {
+    method: "POST"
+  });
 }
 
 export async function startService(projectId: string, serviceId: string): Promise<ServiceSnapshot> {

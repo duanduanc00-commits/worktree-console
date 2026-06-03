@@ -32,6 +32,13 @@ import type {
   ProjectSnapshot,
   RegisteredProject,
   RegisteredService,
+  RegisteredServiceGroup,
+  ServiceGroupAction,
+  ServiceGroupActionOperation,
+  ServiceGroupActionResponse,
+  ServiceGroupActionResult,
+  ServiceGroupSnapshot,
+  ServiceGroupStatus,
   ServiceSnapshot,
   WorktreeDiffResponse
 } from "../shared/types";
@@ -55,6 +62,15 @@ type ServiceController = {
   restart(projectId: string, service: RegisteredService): Promise<ServiceSnapshot>;
   logs(projectId: string, serviceId: string): Promise<string[]>;
 };
+
+class HttpError extends Error {
+  constructor(
+    readonly status: number,
+    message: string
+  ) {
+    super(message);
+  }
+}
 
 export function createApp({
   activityLog = new ActivityLog(join(process.cwd(), "data", "activity-log.json")),
@@ -246,6 +262,131 @@ export function createApp({
     }
   });
 
+  app.post("/api/projects/:id/service-groups", async (request, response, next) => {
+    try {
+      const project = await findProject(registry, request.params.id);
+      const name = String(request.body?.name ?? "").trim();
+      const serviceIds = parseServiceIds(request.body?.serviceIds);
+
+      if (!name || serviceIds === null || serviceIds.length === 0) {
+        response.status(400).json({ error: "Service group name and at least one service id are required." });
+        return;
+      }
+
+      const group = await registry.addServiceGroup(project.id, { name, serviceIds });
+      await recordActivity(activityLog, {
+        action: "service-group.add",
+        label: "Registered service group",
+        ...projectActivity(project),
+        targetType: "service-group",
+        target: group.name,
+        detail: describeServiceCount(group.serviceIds.length)
+      });
+      response.status(201).json(group);
+    } catch (error) {
+      next(mapRegistryError(error));
+    }
+  });
+
+  app.patch("/api/projects/:id/service-groups/:groupId", async (request, response, next) => {
+    try {
+      const { project, group } = await findProjectServiceGroup(registry, request.params.id, request.params.groupId);
+      const payload: { name?: string; serviceIds?: string[] } = {};
+
+      if (Object.hasOwn(request.body ?? {}, "name")) {
+        payload.name = String(request.body.name ?? "");
+      }
+      if (Object.hasOwn(request.body ?? {}, "serviceIds")) {
+        const serviceIds = parseServiceIds(request.body.serviceIds);
+        if (serviceIds === null) {
+          response.status(400).json({ error: "Service group serviceIds must be an array." });
+          return;
+        }
+        payload.serviceIds = serviceIds;
+      }
+      if (payload.name === undefined && payload.serviceIds === undefined) {
+        response.status(400).json({ error: "Service group update requires a name or serviceIds." });
+        return;
+      }
+
+      const updated = await registry.updateServiceGroup(project.id, group.id, payload);
+      await recordActivity(activityLog, {
+        action: "service-group.update",
+        label: "Updated service group",
+        ...projectActivity(project),
+        targetType: "service-group",
+        target: updated.name,
+        detail: group.name === updated.name ? describeServiceCount(updated.serviceIds.length) : `Renamed from ${group.name}`
+      });
+      response.json(updated);
+    } catch (error) {
+      next(mapRegistryError(error));
+    }
+  });
+
+  app.delete("/api/projects/:id/service-groups/:groupId", async (request, response, next) => {
+    try {
+      const { project, group } = await findProjectServiceGroup(registry, request.params.id, request.params.groupId);
+      await registry.removeServiceGroup(project.id, group.id);
+      await recordActivity(activityLog, {
+        action: "service-group.remove",
+        label: "Removed service group",
+        ...projectActivity(project),
+        targetType: "service-group",
+        target: group.name,
+        detail: describeServiceCount(group.serviceIds.length)
+      });
+      response.status(204).end();
+    } catch (error) {
+      next(mapRegistryError(error));
+    }
+  });
+
+  app.post("/api/projects/:id/service-groups/:groupId/start", async (request, response, next) => {
+    try {
+      const { project, group, services } = await findProjectServiceGroupServices(
+        registry,
+        request.params.id,
+        request.params.groupId
+      );
+      const payload = await runServiceGroupAction(serviceManager, project.id, group, services, "start");
+      await recordServiceGroupActionActivity(activityLog, project, group, payload);
+      response.status(202).json(payload);
+    } catch (error) {
+      next(mapRegistryError(error));
+    }
+  });
+
+  app.post("/api/projects/:id/service-groups/:groupId/stop", async (request, response, next) => {
+    try {
+      const { project, group, services } = await findProjectServiceGroupServices(
+        registry,
+        request.params.id,
+        request.params.groupId
+      );
+      const payload = await runServiceGroupAction(serviceManager, project.id, group, services, "stop");
+      await recordServiceGroupActionActivity(activityLog, project, group, payload);
+      response.status(202).json(payload);
+    } catch (error) {
+      next(mapRegistryError(error));
+    }
+  });
+
+  app.post("/api/projects/:id/service-groups/:groupId/restart", async (request, response, next) => {
+    try {
+      const { project, group, services } = await findProjectServiceGroupServices(
+        registry,
+        request.params.id,
+        request.params.groupId
+      );
+      const payload = await runServiceGroupAction(serviceManager, project.id, group, services, "restart");
+      await recordServiceGroupActionActivity(activityLog, project, group, payload);
+      response.status(202).json(payload);
+    } catch (error) {
+      next(mapRegistryError(error));
+    }
+  });
+
   app.post("/api/projects/:id/services/:serviceId/start", async (request, response, next) => {
     try {
       const { project, service } = await findProjectService(registry, request.params.id, request.params.serviceId);
@@ -415,7 +556,8 @@ export function createApp({
   });
 
   app.use((error: Error, _request: express.Request, response: express.Response, _next: express.NextFunction) => {
-    response.status(500).json({ error: error.message });
+    const status = error instanceof HttpError ? error.status : 500;
+    response.status(status).json({ error: error.message });
   });
 
   return app;
@@ -426,6 +568,7 @@ export async function snapshotProject(
   serviceManager: ServiceController = new ServiceManager()
 ): Promise<ProjectSnapshot> {
   const services = await Promise.all(project.services.map((service) => serviceManager.snapshot(project.id, service)));
+  const serviceGroups = buildServiceGroupSnapshots(project.serviceGroups, services);
   const exists = await pathExists(project.path);
   if (!exists) {
     return {
@@ -437,7 +580,8 @@ export async function snapshotProject(
       worktrees: [],
       branches: [],
       recentCommits: [],
-      services
+      services,
+      serviceGroups
     };
   }
 
@@ -453,6 +597,7 @@ export async function snapshotProject(
       branches: [],
       recentCommits: [],
       services,
+      serviceGroups,
       error: "Path exists but is not a Git repository."
     };
   }
@@ -517,7 +662,8 @@ export async function snapshotProject(
       worktrees,
       branches,
       recentCommits,
-      services
+      services,
+      serviceGroups
     };
   } catch (error) {
     return {
@@ -530,6 +676,7 @@ export async function snapshotProject(
       branches: [],
       recentCommits: [],
       services,
+      serviceGroups,
       error: (error as Error).message
     };
   }
@@ -572,13 +719,171 @@ function projectActivity(project: RegisteredProject): Pick<ActivityEvent, "proje
   };
 }
 
+function buildServiceGroupSnapshots(
+  groups: RegisteredServiceGroup[],
+  services: ServiceSnapshot[]
+): ServiceGroupSnapshot[] {
+  const servicesById = new Map(services.map((service) => [service.id, service]));
+
+  return groups.map((group) => {
+    const groupServices = group.serviceIds
+      .map((serviceId) => servicesById.get(serviceId))
+      .filter((service): service is ServiceSnapshot => Boolean(service));
+
+    return {
+      ...group,
+      services: groupServices,
+      status: groupStatus(group, groupServices)
+    };
+  });
+}
+
+function groupStatus(group: RegisteredServiceGroup, services: ServiceSnapshot[]): ServiceGroupStatus {
+  if (services.length === 0 || services.length !== group.serviceIds.length) {
+    return "error";
+  }
+  if (services.some((service) => service.status === "error" || service.status === "port-occupied")) {
+    return "error";
+  }
+  if (services.every((service) => service.status === "running" || service.status === "starting")) {
+    return "running";
+  }
+  if (services.every((service) => service.status === "stopped")) {
+    return "stopped";
+  }
+  return "partial";
+}
+
+async function findProjectServiceGroup(
+  registry: ProjectRegistry,
+  projectId: string,
+  groupId: string
+): Promise<{ project: RegisteredProject; group: RegisteredServiceGroup }> {
+  const project = await findProject(registry, projectId);
+  const group = project.serviceGroups.find((candidate) => candidate.id === groupId);
+  if (!group) {
+    throw new HttpError(404, "Service group not found.");
+  }
+  return { project, group };
+}
+
+async function findProjectServiceGroupServices(
+  registry: ProjectRegistry,
+  projectId: string,
+  groupId: string
+): Promise<{ project: RegisteredProject; group: RegisteredServiceGroup; services: RegisteredService[] }> {
+  const { project, group } = await findProjectServiceGroup(registry, projectId, groupId);
+  const servicesById = new Map(project.services.map((service) => [service.id, service]));
+  const missingServiceIds = group.serviceIds.filter((serviceId) => !servicesById.has(serviceId));
+  const services = group.serviceIds
+    .map((serviceId) => servicesById.get(serviceId))
+    .filter((service): service is RegisteredService => Boolean(service));
+
+  if (services.length === 0) {
+    throw new HttpError(400, "Service group has no services.");
+  }
+  if (missingServiceIds.length > 0) {
+    throw new HttpError(400, `Service group references unknown service ids: ${missingServiceIds.join(", ")}.`);
+  }
+
+  return { project, group, services };
+}
+
+async function runServiceGroupAction(
+  serviceManager: ServiceController,
+  projectId: string,
+  group: RegisteredServiceGroup,
+  services: RegisteredService[],
+  action: ServiceGroupAction
+): Promise<ServiceGroupActionResponse> {
+  const results: ServiceGroupActionResult[] = [];
+
+  if (action === "start") {
+    await runServiceGroupOperation(serviceManager, projectId, services, "start", results);
+  } else if (action === "stop") {
+    await runServiceGroupOperation(serviceManager, projectId, [...services].reverse(), "stop", results);
+  } else {
+    await runServiceGroupOperation(serviceManager, projectId, [...services].reverse(), "stop", results);
+    await runServiceGroupOperation(serviceManager, projectId, services, "start", results);
+  }
+
+  return {
+    groupId: group.id,
+    groupName: group.name,
+    action,
+    results,
+    errors: results.filter((result) => !result.ok)
+  };
+}
+
+async function runServiceGroupOperation(
+  serviceManager: ServiceController,
+  projectId: string,
+  services: RegisteredService[],
+  operation: ServiceGroupActionOperation,
+  results: ServiceGroupActionResult[]
+): Promise<void> {
+  for (const service of services) {
+    try {
+      const snapshot = await serviceManager[operation](projectId, service);
+      results.push({
+        serviceId: service.id,
+        serviceName: service.name,
+        operation,
+        ok: true,
+        snapshot
+      });
+    } catch (error) {
+      results.push({
+        serviceId: service.id,
+        serviceName: service.name,
+        operation,
+        ok: false,
+        error: (error as Error).message
+      });
+    }
+  }
+}
+
+async function recordServiceGroupActionActivity(
+  activityLog: ActivityRecorder,
+  project: RegisteredProject,
+  group: RegisteredServiceGroup,
+  payload: ServiceGroupActionResponse
+): Promise<void> {
+  const failed = payload.errors.length;
+  const succeeded = payload.results.length - failed;
+  const labels: Record<ServiceGroupAction, string> = {
+    start: "Started service group",
+    stop: "Stopped service group",
+    restart: "Restarted service group"
+  };
+
+  await recordActivity(activityLog, {
+    action: `service-group.${payload.action}`,
+    label: labels[payload.action],
+    ...projectActivity(project),
+    targetType: "service-group",
+    target: group.name,
+    status: failed > 0 ? "failed" : "success",
+    detail: failed > 0 ? `${failed} failed, ${succeeded} succeeded` : `${succeeded} succeeded`
+  });
+}
+
 async function findProjectService(registry: ProjectRegistry, projectId: string, serviceId: string) {
   const project = await findProject(registry, projectId);
   const service = project.services.find((candidate) => candidate.id === serviceId);
   if (!service) {
-    throw new Error(`Service not found: ${serviceId}`);
+    throw new HttpError(404, "Service not found.");
   }
   return { project, service };
+}
+
+function parseServiceIds(input: unknown): string[] | null {
+  if (!Array.isArray(input)) {
+    return null;
+  }
+  return input.map(String).map((serviceId) => serviceId.trim()).filter(Boolean);
 }
 
 function parsePorts(input: unknown): number[] {
@@ -600,9 +905,36 @@ function parsePorts(input: unknown): number[] {
 async function findProject(registry: ProjectRegistry, id: string): Promise<RegisteredProject> {
   const project = (await registry.listProjects()).find((candidate) => candidate.id === id);
   if (!project) {
-    throw new Error(`Project not found: ${id}`);
+    throw new HttpError(404, "Project not found.");
   }
   return project;
+}
+
+function mapRegistryError(error: unknown): Error {
+  if (error instanceof HttpError) {
+    return error;
+  }
+
+  const message = error instanceof Error ? error.message : String(error);
+  if (message.startsWith("Project not found")) {
+    return new HttpError(404, "Project not found.");
+  }
+  if (message.startsWith("Service group not found")) {
+    return new HttpError(404, "Service group not found.");
+  }
+  if (
+    message.startsWith("Service group name is required") ||
+    message.startsWith("Service group requires") ||
+    message.startsWith("Unknown service id")
+  ) {
+    return new HttpError(400, message.endsWith(".") ? message : `${message}.`);
+  }
+
+  return error instanceof Error ? error : new Error(message);
+}
+
+function describeServiceCount(count: number): string {
+  return `${count} service${count === 1 ? "" : "s"}`;
 }
 
 function openPath(path: string) {

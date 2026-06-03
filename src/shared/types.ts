@@ -108,6 +108,34 @@ export type ServiceSnapshot = RegisteredService & {
   error?: string;
 };
 
+export type ServiceGroupStatus = "running" | "partial" | "stopped" | "error";
+
+export type ServiceGroupSnapshot = RegisteredServiceGroup & {
+  services: ServiceSnapshot[];
+  status: ServiceGroupStatus;
+};
+
+export type ServiceGroupAction = "start" | "stop" | "restart";
+
+export type ServiceGroupActionOperation = "start" | "stop";
+
+export type ServiceGroupActionResult = {
+  serviceId: string;
+  serviceName: string;
+  operation: ServiceGroupActionOperation;
+  ok: boolean;
+  snapshot?: ServiceSnapshot;
+  error?: string;
+};
+
+export type ServiceGroupActionResponse = {
+  groupId: string;
+  groupName: string;
+  action: ServiceGroupAction;
+  results: ServiceGroupActionResult[];
+  errors: ServiceGroupActionResult[];
+};
+
 export type ProjectSnapshot = Omit<RegisteredProject, "services" | "serviceGroups"> & {
   exists: boolean;
   isGitRepository: boolean;
@@ -117,7 +145,7 @@ export type ProjectSnapshot = Omit<RegisteredProject, "services" | "serviceGroup
   branches: BranchInfo[];
   recentCommits: RecentCommit[];
   services: ServiceSnapshot[];
-  serviceGroups?: RegisteredServiceGroup[];
+  serviceGroups?: ServiceGroupSnapshot[];
   error?: string;
 };
 
@@ -176,7 +204,7 @@ export type DashboardResponse = {
   health: HealthSummary;
 };
 
-export type ActivityTargetType = "project" | "worktree" | "branch" | "service";
+export type ActivityTargetType = "project" | "worktree" | "branch" | "service" | "service-group";
 
 export type ActivityEvent = {
   id: string;

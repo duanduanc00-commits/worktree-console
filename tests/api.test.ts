@@ -11,6 +11,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createApp } from "../src/server/app";
 import { ActivityLog } from "../src/server/activity";
 import { ProjectRegistry } from "../src/server/registry";
+import type { RegisteredService, ServiceSnapshot } from "../src/shared/types";
 
 let tempDir: string;
 const execFileAsync = promisify(execFile);
@@ -177,6 +178,253 @@ describe("createApp", () => {
     await request(app)
       .delete(`/api/projects/${projectResponse.body.id}/services/${serviceResponse.body.id}`)
       .expect(204);
+  });
+
+  it("creates service groups and returns group snapshots in the dashboard", async () => {
+    const activityLog = new ActivityLog(join(tempDir, "activity.json"));
+    const registry = new ProjectRegistry(join(tempDir, "projects.json"));
+    const app = createApp({
+      activityLog,
+      registry,
+      serviceManager: fakeServiceManager({
+        snapshots: {
+          API: "running",
+          Worker: "starting"
+        }
+      }).manager
+    });
+
+    const projectResponse = await request(app)
+      .post("/api/projects")
+      .send({ name: "Grouped repo", path: join(tempDir, "repo") })
+      .expect(201);
+    const apiResponse = await request(app)
+      .post(`/api/projects/${projectResponse.body.id}/services`)
+      .send({
+        name: "API",
+        cwd: join(tempDir, "repo"),
+        command: "npm run api",
+        ports: [5200],
+        healthUrl: null
+      })
+      .expect(201);
+    const workerResponse = await request(app)
+      .post(`/api/projects/${projectResponse.body.id}/services`)
+      .send({
+        name: "Worker",
+        cwd: join(tempDir, "repo"),
+        command: "npm run worker",
+        ports: [5201],
+        healthUrl: null
+      })
+      .expect(201);
+
+    const groupResponse = await request(app)
+      .post(`/api/projects/${projectResponse.body.id}/service-groups`)
+      .send({ name: " Core ", serviceIds: [apiResponse.body.id, workerResponse.body.id] })
+      .expect(201);
+
+    expect(groupResponse.body).toMatchObject({
+      name: "Core",
+      serviceIds: [apiResponse.body.id, workerResponse.body.id]
+    });
+
+    const dashboardResponse = await request(app).get("/api/projects").expect(200);
+    expect(dashboardResponse.body.projects[0].serviceGroups).toEqual([
+      expect.objectContaining({
+        id: groupResponse.body.id,
+        name: "Core",
+        status: "running",
+        serviceIds: [apiResponse.body.id, workerResponse.body.id],
+        services: [
+          expect.objectContaining({ id: apiResponse.body.id, status: "running" }),
+          expect.objectContaining({ id: workerResponse.body.id, status: "starting" })
+        ]
+      })
+    ]);
+
+    const activityResponse = await request(app).get("/api/activity").expect(200);
+    expect(activityResponse.body.events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          action: "service-group.add",
+          label: "Registered service group",
+          target: "Core"
+        })
+      ])
+    );
+  });
+
+  it("deletes service groups", async () => {
+    const registry = new ProjectRegistry(join(tempDir, "projects.json"));
+    const app = createApp({
+      activityLog: new ActivityLog(join(tempDir, "activity.json")),
+      registry,
+      serviceManager: fakeServiceManager().manager
+    });
+    const { project, services } = await registerProjectServices(registry);
+    const group = await registry.addServiceGroup(project.id, {
+      name: "Core",
+      serviceIds: services.map((service) => service.id)
+    });
+
+    await request(app).delete(`/api/projects/${project.id}/service-groups/${group.id}`).expect(204);
+
+    const dashboardResponse = await request(app).get("/api/projects").expect(200);
+    expect(dashboardResponse.body.projects[0].serviceGroups).toEqual([]);
+
+    const activityResponse = await request(app).get("/api/activity").expect(200);
+    expect(activityResponse.body.events[0]).toMatchObject({
+      action: "service-group.remove",
+      label: "Removed service group",
+      target: "Core"
+    });
+  });
+
+  it("starts service groups in configured order and returns per-service results", async () => {
+    const registry = new ProjectRegistry(join(tempDir, "projects.json"));
+    const calls: string[] = [];
+    const app = createApp({
+      activityLog: new ActivityLog(join(tempDir, "activity.json")),
+      registry,
+      serviceManager: fakeServiceManager({ calls }).manager
+    });
+    const { project, services } = await registerProjectServices(registry);
+    const group = await registry.addServiceGroup(project.id, {
+      name: "Core",
+      serviceIds: services.map((service) => service.id)
+    });
+
+    const response = await request(app)
+      .post(`/api/projects/${project.id}/service-groups/${group.id}/start`)
+      .expect(202);
+
+    expect(calls).toEqual(["start:API", "start:Worker"]);
+    expect(response.body).toMatchObject({
+      groupId: group.id,
+      groupName: "Core",
+      action: "start",
+      errors: [],
+      results: [
+        {
+          serviceId: services[0].id,
+          serviceName: "API",
+          operation: "start",
+          ok: true,
+          snapshot: expect.objectContaining({ status: "running" })
+        },
+        {
+          serviceId: services[1].id,
+          serviceName: "Worker",
+          operation: "start",
+          ok: true,
+          snapshot: expect.objectContaining({ status: "running" })
+        }
+      ]
+    });
+
+    const activityResponse = await request(app).get("/api/activity").expect(200);
+    expect(activityResponse.body.events[0]).toMatchObject({
+      action: "service-group.start",
+      label: "Started service group",
+      target: "Core",
+      status: "success"
+    });
+  });
+
+  it("stops service groups in reverse order", async () => {
+    const registry = new ProjectRegistry(join(tempDir, "projects.json"));
+    const calls: string[] = [];
+    const app = createApp({
+      activityLog: new ActivityLog(join(tempDir, "activity.json")),
+      registry,
+      serviceManager: fakeServiceManager({ calls }).manager
+    });
+    const { project, services } = await registerProjectServices(registry);
+    const group = await registry.addServiceGroup(project.id, {
+      name: "Core",
+      serviceIds: services.map((service) => service.id)
+    });
+
+    await request(app).post(`/api/projects/${project.id}/service-groups/${group.id}/stop`).expect(202);
+
+    expect(calls).toEqual(["stop:Worker", "stop:API"]);
+  });
+
+  it("restarts service groups by stopping reverse order then starting configured order", async () => {
+    const registry = new ProjectRegistry(join(tempDir, "projects.json"));
+    const calls: string[] = [];
+    const app = createApp({
+      activityLog: new ActivityLog(join(tempDir, "activity.json")),
+      registry,
+      serviceManager: fakeServiceManager({ calls }).manager
+    });
+    const { project, services } = await registerProjectServices(registry);
+    const group = await registry.addServiceGroup(project.id, {
+      name: "Core",
+      serviceIds: services.map((service) => service.id)
+    });
+
+    const response = await request(app)
+      .post(`/api/projects/${project.id}/service-groups/${group.id}/restart`)
+      .expect(202);
+
+    expect(calls).toEqual(["stop:Worker", "stop:API", "start:API", "start:Worker"]);
+    expect(
+      response.body.results.map((result: { operation: string; serviceName: string }) => `${result.operation}:${result.serviceName}`)
+    ).toEqual(["stop:Worker", "stop:API", "start:API", "start:Worker"]);
+  });
+
+  it("keeps processing service group actions when one service fails", async () => {
+    const registry = new ProjectRegistry(join(tempDir, "projects.json"));
+    const calls: string[] = [];
+    const app = createApp({
+      activityLog: new ActivityLog(join(tempDir, "activity.json")),
+      registry,
+      serviceManager: fakeServiceManager({ calls, failStartFor: ["API"] }).manager
+    });
+    const { project, services } = await registerProjectServices(registry);
+    const group = await registry.addServiceGroup(project.id, {
+      name: "Core",
+      serviceIds: services.map((service) => service.id)
+    });
+
+    const response = await request(app)
+      .post(`/api/projects/${project.id}/service-groups/${group.id}/start`)
+      .expect(202);
+
+    expect(calls).toEqual(["start:API", "start:Worker"]);
+    expect(response.body.results).toEqual([
+      expect.objectContaining({
+        serviceId: services[0].id,
+        serviceName: "API",
+        operation: "start",
+        ok: false,
+        error: "start failed for API"
+      }),
+      expect.objectContaining({
+        serviceId: services[1].id,
+        serviceName: "Worker",
+        operation: "start",
+        ok: true,
+        snapshot: expect.objectContaining({ status: "running" })
+      })
+    ]);
+    expect(response.body.errors).toEqual([
+      expect.objectContaining({
+        serviceId: services[0].id,
+        serviceName: "API",
+        operation: "start",
+        error: "start failed for API"
+      })
+    ]);
+
+    const activityResponse = await request(app).get("/api/activity").expect(200);
+    expect(activityResponse.body.events[0]).toMatchObject({
+      action: "service-group.start",
+      status: "failed",
+      detail: "1 failed, 1 succeeded"
+    });
   });
 
   it("returns a locally selected folder path", async () => {
@@ -445,4 +693,79 @@ async function git(cwd: string, args: string[]) {
 
 function normalizePath(path: string): string {
   return realpathSync.native(path).replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+}
+
+async function registerProjectServices(registry: ProjectRegistry) {
+  const project = await registry.addProject({
+    name: "Grouped repo",
+    path: join(tempDir, "repo")
+  });
+  const api = await registry.addService(project.id, {
+    name: "API",
+    cwd: join(tempDir, "repo"),
+    command: "npm run api",
+    ports: [5200],
+    healthUrl: null
+  });
+  const worker = await registry.addService(project.id, {
+    name: "Worker",
+    cwd: join(tempDir, "repo"),
+    command: "npm run worker",
+    ports: [5201],
+    healthUrl: null
+  });
+
+  return { project, services: [api, worker] };
+}
+
+type FakeServiceManagerOptions = {
+  calls?: string[];
+  failStartFor?: string[];
+  snapshots?: Record<string, ServiceSnapshot["status"]>;
+};
+
+function fakeServiceManager(options: FakeServiceManagerOptions = {}) {
+  const calls = options.calls ?? [];
+  const failStartFor = new Set(options.failStartFor ?? []);
+  const snapshots = options.snapshots ?? {};
+
+  return {
+    manager: {
+      snapshot: async (_projectId: string, service: RegisteredService) =>
+        serviceSnapshot(service, snapshots[service.name] ?? "stopped"),
+      start: async (_projectId: string, service: RegisteredService) => {
+        calls.push(`start:${service.name}`);
+        if (failStartFor.has(service.name)) {
+          throw new Error(`start failed for ${service.name}`);
+        }
+        return serviceSnapshot(service, "running");
+      },
+      stop: async (_projectId: string, service: RegisteredService) => {
+        calls.push(`stop:${service.name}`);
+        return serviceSnapshot(service, "stopped");
+      },
+      restart: async (_projectId: string, service: RegisteredService) => {
+        calls.push(`restart:${service.name}`);
+        return serviceSnapshot(service, "running");
+      },
+      logs: async () => []
+    },
+    calls
+  };
+}
+
+function serviceSnapshot(service: RegisteredService, status: ServiceSnapshot["status"]): ServiceSnapshot {
+  return {
+    ...service,
+    status,
+    startedByConsole: status === "running" || status === "starting",
+    pid: status === "running" || status === "starting" ? 1234 : null,
+    portsStatus: service.ports.map((port) => ({
+      port,
+      listening: status === "running" || status === "starting",
+      pid: status === "running" || status === "starting" ? 1234 : null,
+      processName: status === "running" || status === "starting" ? "node.exe" : null
+    })),
+    logPreview: []
+  };
 }
