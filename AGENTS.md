@@ -50,8 +50,10 @@ Keep these files present and aligned with behavior:
 - `CODE_OF_CONDUCT.md` describes project collaboration expectations.
 - `.github/workflows/ci.yml` runs `npm ci`, `npm test`, and `npm run build`.
 - `.github/ISSUE_TEMPLATE/` and `.github/PULL_REQUEST_TEMPLATE.md` guide public collaboration.
+- `docs/release.md` describes the current release model and release checklist.
+- `docs/architecture.md` describes the local-first architecture, module ownership, and safety boundaries.
 
-When changing local data behavior, destructive actions, service controls, or Git cleanup safety, update `README.md`, `SECURITY.md`, and this file together.
+When changing local data behavior, destructive actions, service controls, Git cleanup safety, release behavior, or architecture, update `README.md`, `SECURITY.md`, `docs/architecture.md`, `docs/release.md`, and this file as needed.
 
 ## Architecture Notes
 
@@ -63,6 +65,7 @@ When changing local data behavior, destructive actions, service controls, or Git
 - `src/server/activity.ts` records local console operations.
 - `src/lib/*-ui.ts` files contain small UI helper functions with direct tests.
 - `src/App.tsx` is currently the main UI shell; prefer extracting small helpers before adding large new flows directly into it.
+- `docs/architecture.md` should reflect new module boundaries and important data flows.
 
 ## Product Boundaries
 
@@ -72,6 +75,7 @@ When changing local data behavior, destructive actions, service controls, or Git
 - Keep diff APIs bounded and only allow diffs for changed files reported by the corresponding worktree snapshot.
 - Health summary cards are interactive filters. Keep their labels and tooltip text short.
 - Activity log should record meaningful user actions, especially destructive actions and service operations.
+- The browser dashboard refreshes automatically every 30 seconds while the tab is visible. Keep auto-refresh policy in `src/lib/refresh-ui.ts` so it stays directly testable.
 
 ## UI Conventions
 

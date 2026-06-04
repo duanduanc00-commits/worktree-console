@@ -1,8 +1,17 @@
 {
   "name": "worktree-console",
   "version": "0.1.0",
+  "description": "Local-first console for registered Git projects, worktrees, branches, and local services.",
   "private": true,
   "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/duanduanc00-commits/worktree-console.git"
+  },
+  "bugs": {
+    "url": "https://github.com/duanduanc00-commits/worktree-console/issues"
+  },
+  "homepage": "https://github.com/duanduanc00-commits/worktree-console#readme",
   "scripts": {
     "dev": "concurrently \"npm:dev:api\" \"npm:dev:web\"",
     "dev:api": "tsx watch src/server/index.ts",
@@ -22,6 +31,9 @@
     "react-dom": "^19.0.0",
     "tailwind-merge": "^2.5.5",
     "vite": "^6.0.0"
+  },
+  "engines": {
+    "node": ">=22"
   },
   "devDependencies": {
     "@testing-library/jest-dom": "^6.6.3",

@@ -20,6 +20,7 @@ The app only tracks projects you register. Runtime data stays local and is ignor
 - Start, stop, restart, and open services from the console, with safer handling for externally started processes.
 - Group related services into a stack, then start, stop, restart, or remove the group while preserving individual service registrations.
 - Review the Activity view for operations such as project changes, service actions, branch deletion, and worktree removal.
+- Refresh the open console automatically every 30 seconds while the browser tab is visible.
 
 ## Quick Start
 
@@ -54,6 +55,8 @@ Before contributing, read:
 - [CONTRIBUTING.md](CONTRIBUTING.md)
 - [SECURITY.md](SECURITY.md)
 - [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)
+- [docs/release.md](docs/release.md)
+- [docs/architecture.md](docs/architecture.md)
 
 Security and privacy boundaries:
 
@@ -120,4 +123,6 @@ If you change the API port, update the Vite proxy in `vite.config.ts` or run the
 - `src/server/` contains the Express API, Git readers, registry, service manager, activity log, and health summary builder.
 - `src/shared/types.ts` contains shared API and registry types.
 - `tests/` contains Vitest and supertest coverage for server behavior and UI helpers.
+- `docs/release.md` describes the current source-run release model.
+- `docs/architecture.md` describes the local-first architecture and safety boundaries.
 - `docs/superpowers/plans/` contains implementation plans used during agent-driven development.
