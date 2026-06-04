@@ -1212,6 +1212,20 @@ h1 {
   color: var(--subtle);
 }
 
+.branch-worktree {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  min-width: 0;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.branch-worktree-path {
+  flex: 1 1 160px;
+  min-width: 0;
+}
+
 .branch-actions {
   display: inline-flex;
   align-items: center;

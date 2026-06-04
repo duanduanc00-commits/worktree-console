@@ -60,6 +60,7 @@ import {
   serviceGroupStatusLabel,
   serviceGroupStatusTone
 } from "./lib/service-groups-ui";
+import { branchWorktreeAssociation } from "./lib/branch-ui";
 import { healthIssueLabel, healthIssueTone } from "./lib/health-ui";
 import { diffLineTone } from "./lib/diff-ui";
 import type {
@@ -797,6 +798,12 @@ function Inspector({
   onServiceChanged: (message: string) => Promise<void>;
   onTabChange: (tab: InspectorTab) => void;
 }) {
+  const [selectedWorktreePath, setSelectedWorktreePath] = useState<string | null>(null);
+
+  useEffect(() => {
+    setSelectedWorktreePath(null);
+  }, [project?.id]);
+
   if (!project) {
     return (
       <aside className="inspector">
@@ -855,8 +862,24 @@ function Inspector({
 
       {project.error ? <div className="error-banner compact">{project.error}</div> : null}
 
-      {tab === "trees" ? <WorktreePanel project={project} onDeleteWorktree={onDeleteWorktree} /> : null}
-      {tab === "branches" ? <BranchPanel project={project} onDeleteBranch={onDeleteBranch} /> : null}
+      {tab === "trees" ? (
+        <WorktreePanel
+          project={project}
+          selectedPath={selectedWorktreePath}
+          onDeleteWorktree={onDeleteWorktree}
+          onSelectedPathChange={setSelectedWorktreePath}
+        />
+      ) : null}
+      {tab === "branches" ? (
+        <BranchPanel
+          project={project}
+          onDeleteBranch={onDeleteBranch}
+          onViewWorktree={(worktree) => {
+            setSelectedWorktreePath(worktree.path);
+            onTabChange("trees");
+          }}
+        />
+      ) : null}
       {tab === "commits" ? <CommitPanel project={project} /> : null}
       {tab === "services" ? (
         <ServicePanel
@@ -872,18 +895,17 @@ function Inspector({
 
 function WorktreePanel({
   onDeleteWorktree,
+  onSelectedPathChange,
+  selectedPath,
   project
 }: {
   project: ProjectSnapshot;
+  selectedPath: string | null;
   onDeleteWorktree: (project: ProjectSnapshot, worktree: WorktreeInfo) => void;
+  onSelectedPathChange: (path: string | null) => void;
 }) {
-  const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const selectedWorktree =
     project.worktrees.find((worktree) => worktree.path === selectedPath) ?? null;
-
-  useEffect(() => {
-    setSelectedPath(null);
-  }, [project.id]);
 
   return (
     <section className={`section worktree-panel ${selectedWorktree ? "with-changes" : ""}`}>
@@ -897,11 +919,11 @@ function WorktreePanel({
               <div
                 className={`tree-item tree-button ${selectedWorktree?.path === worktree.path ? "active" : ""}`}
                 key={`${worktree.path}-${worktree.head}`}
-                onClick={() => setSelectedPath(selectedWorktree?.path === worktree.path ? null : worktree.path)}
+                onClick={() => onSelectedPathChange(selectedWorktree?.path === worktree.path ? null : worktree.path)}
                 onKeyDown={(event) => {
                   if (event.key === "Enter" || event.key === " ") {
                     event.preventDefault();
-                    setSelectedPath(selectedWorktree?.path === worktree.path ? null : worktree.path);
+                    onSelectedPathChange(selectedWorktree?.path === worktree.path ? null : worktree.path);
                   }
                 }}
                 role="button"
@@ -944,7 +966,7 @@ function WorktreePanel({
         </div>
       </div>
       {selectedWorktree ? (
-        <WorktreeChanges projectId={project.id} onClose={() => setSelectedPath(null)} worktree={selectedWorktree} />
+        <WorktreeChanges projectId={project.id} onClose={() => onSelectedPathChange(null)} worktree={selectedWorktree} />
       ) : null}
     </section>
   );
@@ -1151,10 +1173,12 @@ function DiffPreview({ diff }: { diff: WorktreeDiffResponse }) {
 
 function BranchPanel({
   onDeleteBranch,
+  onViewWorktree,
   project
 }: {
   project: ProjectSnapshot;
   onDeleteBranch: (project: ProjectSnapshot, branch: BranchInfo) => void;
+  onViewWorktree: (worktree: WorktreeInfo) => void;
 }) {
   return (
     <section className="section">
@@ -1165,6 +1189,7 @@ function BranchPanel({
         ) : (
           project.branches.map((branch) => {
             const trackingLabel = branchTrackingLabel(branch);
+            const association = branchWorktreeAssociation(branch, project.worktrees);
 
             return (
               <div className="branch-row" key={branch.name}>
@@ -1177,6 +1202,26 @@ function BranchPanel({
                     <ExplainableText className="branch-meta branch-tracking" tooltip={branchTrackingTooltip(branch)}>
                       {trackingLabel}
                     </ExplainableText>
+                  ) : null}
+                  {association ? (
+                    <div className="branch-worktree">
+                      <ExplainableText className="branch-worktree-path mono" tooltip={association.tooltip}>
+                        {association.worktree.path}
+                      </ExplainableText>
+                      <ExplainableBadge
+                        tone={association.worktree.clean ? "clean" : "dirty"}
+                        tooltip={association.tooltip}
+                      >
+                        {association.changeLabel}
+                      </ExplainableBadge>
+                      <Button
+                        title="Open linked worktree changes"
+                        onClick={() => onViewWorktree(association.worktree)}
+                      >
+                        <ListTree size={13} />
+                        View changes
+                      </Button>
+                    </div>
                   ) : null}
                 </div>
                 <span className="branch-actions">
