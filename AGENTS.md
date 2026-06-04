@@ -22,7 +22,7 @@ Default ports:
 - Frontend: `http://127.0.0.1:5273`
 - API: `http://127.0.0.1:4217`
 
-The API port is controlled by `PORT`. The Vite proxy target is defined in `vite.config.ts`.
+The default URLs assume ports `5273` and `4217` are available. The API port is controlled by `PORT`. If the API port changes, update the Vite `/api` proxy target in `vite.config.ts` to the same port.
 
 ## Local Data
 

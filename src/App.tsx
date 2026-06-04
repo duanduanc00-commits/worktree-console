@@ -76,7 +76,16 @@ import {
   worktreeChangesLayoutClass,
   worktreePanelLayoutClass
 } from "./lib/diff-ui";
-import { AUTO_REFRESH_INTERVAL_MS, shouldAutoRefresh } from "./lib/refresh-ui";
+import {
+  AUTO_REFRESH_INTERVAL_MS,
+  canStartAutoRefresh,
+  finishRefreshRequest,
+  isCurrentRefreshRequest,
+  startRefreshRequest,
+  shouldShowRefreshLoading,
+  type RefreshRequestTracker,
+  type RefreshTrigger
+} from "./lib/refresh-ui";
 import type {
   ActivityEvent,
   BranchInfo,
@@ -144,49 +153,80 @@ export function App() {
   const restoreInspectorWidth = useRef<number | null>(null);
   const inspectorManuallyResized = useRef(false);
   const autoRefreshInFlight = useRef(false);
+  const dashboardRefresh = useRef<RefreshRequestTracker>({ currentRequestId: 0, inFlight: false });
+  const activityRefresh = useRef<RefreshRequestTracker>({ currentRequestId: 0, inFlight: false });
 
-  const refresh = useCallback(async () => {
-    setLoading(true);
+  const refresh = useCallback(async (trigger: RefreshTrigger = "manual") => {
+    const requestId = startRefreshRequest(dashboardRefresh.current);
+    const showLoading = shouldShowRefreshLoading(trigger);
+    if (showLoading) {
+      setLoading(true);
+    }
     setError(null);
     try {
       const nextDashboard = await getDashboard();
-      setDashboard(nextDashboard);
-      setSelectedId((current) => current ?? nextDashboard.projects[0]?.id ?? null);
+      if (isCurrentRefreshRequest(dashboardRefresh.current, requestId)) {
+        setDashboard(nextDashboard);
+        setSelectedId((current) => current ?? nextDashboard.projects[0]?.id ?? null);
+        return true;
+      }
     } catch (caught) {
-      setError((caught as Error).message);
+      if (isCurrentRefreshRequest(dashboardRefresh.current, requestId)) {
+        setError((caught as Error).message);
+      }
+      return false;
     } finally {
-      setLoading(false);
+      const finishedCurrentRequest = finishRefreshRequest(dashboardRefresh.current, requestId);
+      if (showLoading && finishedCurrentRequest) {
+        setLoading(false);
+      }
     }
+    return false;
   }, []);
 
-  const refreshActivity = useCallback(async () => {
-    setActivityLoading(true);
+  const refreshActivity = useCallback(async (trigger: RefreshTrigger = "manual") => {
+    const requestId = startRefreshRequest(activityRefresh.current);
+    const showLoading = shouldShowRefreshLoading(trigger);
+    if (showLoading) {
+      setActivityLoading(true);
+    }
     setActivityError(null);
     try {
-      setActivityEvents(await getActivity(100));
+      const nextEvents = await getActivity(100);
+      if (isCurrentRefreshRequest(activityRefresh.current, requestId)) {
+        setActivityEvents(nextEvents);
+        return true;
+      }
     } catch (caught) {
-      setActivityError((caught as Error).message);
+      if (isCurrentRefreshRequest(activityRefresh.current, requestId)) {
+        setActivityError((caught as Error).message);
+      }
+      return false;
     } finally {
-      setActivityLoading(false);
+      const finishedCurrentRequest = finishRefreshRequest(activityRefresh.current, requestId);
+      if (showLoading && finishedCurrentRequest) {
+        setActivityLoading(false);
+      }
     }
+    return false;
   }, []);
 
   async function refreshAfterOperation() {
-    await refresh();
+    await refresh("operation");
     if (view === "activity") {
-      await refreshActivity();
+      await refreshActivity("operation");
     }
   }
 
   async function handleRefresh() {
-    await refresh();
+    await refresh("manual");
     if (view === "activity") {
-      await refreshActivity();
+      await refreshActivity("manual");
     }
   }
 
   useEffect(() => {
-    void refresh();
+    void refresh("initial");
   }, [refresh]);
 
   useEffect(() => {
@@ -197,14 +237,22 @@ export function App() {
 
   useEffect(() => {
     const timer = window.setInterval(() => {
-      if (!shouldAutoRefresh(document.visibilityState) || autoRefreshInFlight.current) return;
+      if (
+        !canStartAutoRefresh({
+          autoCycleInFlight: autoRefreshInFlight.current,
+          refreshInFlight: dashboardRefresh.current.inFlight,
+          visibilityState: document.visibilityState
+        })
+      ) {
+        return;
+      }
 
       autoRefreshInFlight.current = true;
       void (async () => {
         try {
-          await refresh();
-          if (view === "activity") {
-            await refreshActivity();
+          await refresh("auto");
+          if (view === "activity" && !activityRefresh.current.inFlight) {
+            await refreshActivity("auto");
           }
         } finally {
           autoRefreshInFlight.current = false;

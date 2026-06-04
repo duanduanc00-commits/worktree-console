@@ -24,17 +24,25 @@ The app only tracks projects you register. Runtime data stays local and is ignor
 
 ## Quick Start
 
+Prerequisites:
+
+- Node.js 22 or newer. npm is included with Node.js.
+- Git installed and available from your shell.
+- For the default URLs, local ports `5273` and `4217` should be available.
+
 ```powershell
 npm install
 npm run dev
 ```
 
-By default:
+When the default ports are available:
 
 - Frontend: `http://127.0.0.1:5273`
 - API: `http://127.0.0.1:4217`
 
 The Vite dev server proxies `/api` to the local API server.
+
+If port `5273` is already in use, Vite may print a different frontend URL in the terminal. If port `4217` is already in use, set `PORT` for the API and update the `/api` proxy target in `vite.config.ts` to the same port.
 
 ## Development Commands
 

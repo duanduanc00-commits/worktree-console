@@ -16,8 +16,9 @@ The package is private because the project is not yet published as an npm packag
 Requirements:
 
 - Node.js 22 or newer
-- npm
-- Git
+- npm, which is included with Node.js
+- Git installed and available from the shell
+- Local ports `5273` and `4217` available for the default frontend and API URLs
 
 Install and run:
 
@@ -26,10 +27,12 @@ npm ci
 npm run dev
 ```
 
-Default local URLs:
+Default local URLs when the default ports are available:
 
 - Frontend: `http://127.0.0.1:5273`
 - API: `http://127.0.0.1:4217`
+
+If port `5273` is already in use, Vite may print a different frontend URL in the terminal. If port `4217` is already in use, set `PORT` for the API and update the `/api` proxy target in `vite.config.ts` to the same port.
 
 Build and test before sharing a change:
 
