@@ -1,6 +1,7 @@
-import { FormEvent, useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent, type ReactNode } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent, type ReactNode } from "react";
 import {
   Activity,
+  ArrowLeft,
   Copy,
   ExternalLink,
   FolderOpen,
@@ -69,7 +70,12 @@ import {
   healthMetricTooltip,
   type HealthMetricFilter
 } from "./lib/health-ui";
-import { diffLineTone } from "./lib/diff-ui";
+import {
+  diffLineTone,
+  focusedChangesInspectorWidth,
+  worktreeChangesLayoutClass,
+  worktreePanelLayoutClass
+} from "./lib/diff-ui";
 import type {
   ActivityEvent,
   BranchInfo,
@@ -134,6 +140,8 @@ export function App() {
   const [notice, setNotice] = useState<string | null>(null);
   const [inspectorWidth, setInspectorWidth] = useState(640);
   const [confirmAction, setConfirmAction] = useState<ConfirmAction | null>(null);
+  const restoreInspectorWidth = useRef<number | null>(null);
+  const inspectorManuallyResized = useRef(false);
 
   async function refresh() {
     setLoading(true);
@@ -253,6 +261,33 @@ export function App() {
     await navigator.clipboard.writeText(project.path);
     setNotice(`Copied path for ${project.name}.`);
   }
+
+  const handleInspectorResizeStart = useCallback((event: PointerEvent<HTMLButtonElement>) => {
+    inspectorManuallyResized.current = true;
+    restoreInspectorWidth.current = null;
+    startInspectorResize(event, setInspectorWidth);
+  }, []);
+
+  const handleChangesFocusChange = useCallback((focused: boolean) => {
+    if (inspectorManuallyResized.current || typeof window === "undefined") return;
+
+    if (focused) {
+      setInspectorWidth((currentWidth) => {
+        restoreInspectorWidth.current ??= currentWidth;
+        return focusedChangesInspectorWidth({
+          currentWidth,
+          viewportWidth: window.innerWidth
+        });
+      });
+      return;
+    }
+
+    setInspectorWidth((currentWidth) => {
+      const nextWidth = restoreInspectorWidth.current ?? currentWidth;
+      restoreInspectorWidth.current = null;
+      return nextWidth;
+    });
+  }, []);
 
   return (
     <div className="window-shell">
@@ -411,7 +446,8 @@ export function App() {
               service
             });
           }}
-          onResizeStart={(event) => startInspectorResize(event, setInspectorWidth)}
+          onChangesFocusChange={handleChangesFocusChange}
+          onResizeStart={handleInspectorResizeStart}
           onServiceChanged={async (message) => {
             setNotice(message);
             await refreshAfterOperation();
@@ -887,6 +923,7 @@ function Inspector({
   onDeleteService,
   onDeleteWorktree,
   onEditProject,
+  onChangesFocusChange,
   onResizeStart,
   onServiceChanged,
   onTabChange,
@@ -900,6 +937,7 @@ function Inspector({
   onDeleteService: (project: ProjectSnapshot, service: ServiceSnapshot) => void;
   onDeleteWorktree: (project: ProjectSnapshot, worktree: WorktreeInfo) => void;
   onEditProject: (project: ProjectSnapshot) => void;
+  onChangesFocusChange: (focused: boolean) => void;
   onResizeStart: (event: PointerEvent<HTMLButtonElement>) => void;
   onServiceChanged: (message: string) => Promise<void>;
   onTabChange: (tab: InspectorTab) => void;
@@ -909,6 +947,10 @@ function Inspector({
   useEffect(() => {
     setSelectedWorktreePath(null);
   }, [project?.id]);
+
+  useEffect(() => {
+    onChangesFocusChange(tab === "trees" && Boolean(selectedWorktreePath));
+  }, [onChangesFocusChange, selectedWorktreePath, tab]);
 
   if (!project) {
     return (
@@ -1014,66 +1056,67 @@ function WorktreePanel({
     project.worktrees.find((worktree) => worktree.path === selectedPath) ?? null;
 
   return (
-    <section className={`section worktree-panel ${selectedWorktree ? "with-changes" : ""}`}>
-      <div className="worktree-list-pane">
-        <h3>Worktrees</h3>
-        <div className="tree">
-          {project.worktrees.length === 0 ? (
-            <div className="empty-state compact">No worktrees found.</div>
-          ) : (
-            project.worktrees.map((worktree) => (
-              <div
-                className={`tree-item tree-button ${selectedWorktree?.path === worktree.path ? "active" : ""}`}
-                key={`${worktree.path}-${worktree.head}`}
-                onClick={() => onSelectedPathChange(selectedWorktree?.path === worktree.path ? null : worktree.path)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter" || event.key === " ") {
-                    event.preventDefault();
-                    onSelectedPathChange(selectedWorktree?.path === worktree.path ? null : worktree.path);
-                  }
-                }}
-                role="button"
-                tabIndex={0}
-              >
-                <div className="tree-top">
-                  <strong>{worktree.branch ?? "detached"}</strong>
-                  <span className="tree-badges">
-                    <ExplainableBadge align="right" tone={worktree.clean ? "clean" : "dirty"} tooltip={worktreeChangeTooltip(worktree)}>
-                      {worktree.clean ? "Clean" : `${worktree.dirtyFiles ?? 0} changed`}
-                    </ExplainableBadge>
-                    <ExplainableBadge align="right" tone={removalTone(worktree.removal?.level)} tooltip={removalTooltip(worktree.removal)}>
-                      {worktree.removal?.label ?? "Unknown"}
-                    </ExplainableBadge>
-                    <ExplainableBadge align="right" tooltip={worktreeKindTooltip(worktree)}>
-                      {worktree.detached ? "Detached" : "Branch"}
-                    </ExplainableBadge>
-                  </span>
-                </div>
-                <ExplainableText className="worktree-origin" tooltip={worktreeOriginTooltip(worktree)}>
-                  {worktreeOriginLabel(worktree)}
-                </ExplainableText>
-                <span className="mono">{worktree.path}</span>
-                {worktree.removal?.canDelete ? (
-                  <span className="tree-actions">
-                    <Button
-                      size="icon"
-                      variant="ghost"
-                      aria-label="Remove safe worktree"
-                      title="Remove safe worktree"
-                      onClick={(event) => action(event, () => onDeleteWorktree(project, worktree))}
-                    >
-                      <Trash2 size={14} />
-                    </Button>
-                  </span>
-                ) : null}
-              </div>
-            ))
-          )}
-        </div>
-      </div>
+    <section className={worktreePanelLayoutClass(Boolean(selectedWorktree))}>
       {selectedWorktree ? (
         <WorktreeChanges projectId={project.id} onClose={() => onSelectedPathChange(null)} worktree={selectedWorktree} />
-      ) : null}
+      ) : (
+        <div className="worktree-list-pane">
+          <h3>Worktrees</h3>
+          <div className="tree">
+            {project.worktrees.length === 0 ? (
+              <div className="empty-state compact">No worktrees found.</div>
+            ) : (
+              project.worktrees.map((worktree) => (
+                <div
+                  className="tree-item tree-button"
+                  key={`${worktree.path}-${worktree.head}`}
+                  onClick={() => onSelectedPathChange(worktree.path)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      onSelectedPathChange(worktree.path);
+                    }
+                  }}
+                  role="button"
+                  tabIndex={0}
+                >
+                  <div className="tree-top">
+                    <strong>{worktree.branch ?? "detached"}</strong>
+                    <span className="tree-badges">
+                      <ExplainableBadge align="right" tone={worktree.clean ? "clean" : "dirty"} tooltip={worktreeChangeTooltip(worktree)}>
+                        {worktree.clean ? "Clean" : `${worktree.dirtyFiles ?? 0} changed`}
+                      </ExplainableBadge>
+                      <ExplainableBadge align="right" tone={removalTone(worktree.removal?.level)} tooltip={removalTooltip(worktree.removal)}>
+                        {worktree.removal?.label ?? "Unknown"}
+                      </ExplainableBadge>
+                      <ExplainableBadge align="right" tooltip={worktreeKindTooltip(worktree)}>
+                        {worktree.detached ? "Detached" : "Branch"}
+                      </ExplainableBadge>
+                    </span>
+                  </div>
+                  <ExplainableText className="worktree-origin" tooltip={worktreeOriginTooltip(worktree)}>
+                    {worktreeOriginLabel(worktree)}
+                  </ExplainableText>
+                  <span className="mono">{worktree.path}</span>
+                  {worktree.removal?.canDelete ? (
+                    <span className="tree-actions">
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        aria-label="Remove safe worktree"
+                        title="Remove safe worktree"
+                        onClick={(event) => action(event, () => onDeleteWorktree(project, worktree))}
+                      >
+                        <Trash2 size={14} />
+                      </Button>
+                    </span>
+                  ) : null}
+                </div>
+              ))
+            )}
+          </div>
+        </div>
+      )}
     </section>
   );
 }
@@ -1197,9 +1240,13 @@ function WorktreeChanges({
   const copyStatus = copyStatusLabel();
 
   return (
-    <section className="worktree-detail">
+    <section className={worktreeChangesLayoutClass(changes.length)}>
       <div className="detail-heading">
         <div>
+          <button className="back-to-worktrees" onClick={onClose} type="button">
+            <ArrowLeft size={13} />
+            Worktrees
+          </button>
           <h3>Changes</h3>
           <p className="mono">{worktreeOriginLabel(worktree)}</p>
         </div>
@@ -1213,49 +1260,53 @@ function WorktreeChanges({
       {changes.length === 0 ? (
         <div className="empty-state compact">No local changes in this worktree.</div>
       ) : (
-        <>
-          <div className="change-list">
-            {changes.map((change) => (
-              <button
-                className={`change-row ${selectedFile === change.path ? "selected" : ""}`}
-                key={`${change.code}-${change.path}`}
-                onClick={() => void loadDiff(change.path)}
-                type="button"
-              >
-                <span className={`change-code ${changeTone(change.code)}`}>{change.code}</span>
-                <span className="mono">{change.path}</span>
-              </button>
-            ))}
+        <div className="changes-layout">
+          <div className="change-list-pane">
+            <div className="change-list">
+              {changes.map((change) => (
+                <button
+                  className={`change-row ${selectedFile === change.path ? "selected" : ""}`}
+                  key={`${change.code}-${change.path}`}
+                  onClick={() => void loadDiff(change.path)}
+                  type="button"
+                >
+                  <span className={`change-code ${changeTone(change.code)}`}>{change.code}</span>
+                  <span className="mono">{change.path}</span>
+                </button>
+              ))}
+            </div>
           </div>
-          <div className="diff-section" aria-live="polite">
-            {selectedFile ? (
-              <div className="diff-heading">
-                <div className="diff-file">
-                  <strong>{selectedFile}</strong>
-                  {copyStatus ? (
-                    <span className={`diff-note ${copyError ? "error" : ""}`}>{copyStatus}</span>
-                  ) : null}
+          <div className="diff-pane">
+            <div className="diff-section" aria-live="polite">
+              {selectedFile ? (
+                <div className="diff-heading">
+                  <div className="diff-file">
+                    <strong>{selectedFile}</strong>
+                    {copyStatus ? (
+                      <span className={`diff-note ${copyError ? "error" : ""}`}>{copyStatus}</span>
+                    ) : null}
+                  </div>
+                  <span className="detail-actions">
+                    {diff?.truncated ? <Badge tone="dirty">Truncated</Badge> : null}
+                    <Button title="Copy selected file path" onClick={() => void copySelectedPath()}>
+                      <Copy size={13} />
+                      {copiedPath === selectedFile ? "Copied" : "Copy path"}
+                    </Button>
+                  </span>
                 </div>
-                <span className="detail-actions">
-                  {diff?.truncated ? <Badge tone="dirty">Truncated</Badge> : null}
-                  <Button title="Copy selected file path" onClick={() => void copySelectedPath()}>
-                    <Copy size={13} />
-                    {copiedPath === selectedFile ? "Copied" : "Copy path"}
-                  </Button>
-                </span>
-              </div>
-            ) : null}
-            {diffLoading ? (
-              <div className="empty-state compact">Loading diff...</div>
-            ) : diffError ? (
-              <div className="error-banner compact">{diffError}</div>
-            ) : diff ? (
-              <DiffPreview diff={diff} />
-            ) : (
-              <div className="empty-state compact">Select a changed file to preview its diff.</div>
-            )}
+              ) : null}
+              {diffLoading ? (
+                <div className="empty-state compact">Loading diff...</div>
+              ) : diffError ? (
+                <div className="error-banner compact">{diffError}</div>
+              ) : diff ? (
+                <DiffPreview diff={diff} />
+              ) : (
+                <div className="empty-state compact">Select a changed file to preview its diff.</div>
+              )}
+            </div>
           </div>
-        </>
+        </div>
       )}
     </section>
   );

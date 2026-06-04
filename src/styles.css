@@ -956,10 +956,6 @@ button.stat {
   gap: 12px;
 }
 
-.worktree-panel.with-changes {
-  grid-template-columns: minmax(220px, 0.95fr) minmax(260px, 1.05fr);
-}
-
 .worktree-list-pane {
   min-width: 0;
 }
@@ -1031,6 +1027,11 @@ button.stat {
   box-shadow: 0 10px 32px rgba(0, 0, 0, 0.08);
 }
 
+.changes-focused .worktree-detail {
+  position: static;
+  margin-top: 0;
+}
+
 .detail-heading {
   display: flex;
   align-items: flex-start;
@@ -1045,7 +1046,25 @@ button.stat {
 
 .detail-heading p {
   margin: 3px 0 0;
-  max-width: 180px;
+  max-width: 260px;
+}
+
+.back-to-worktrees {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  padding: 0;
+  gap: 4px;
+  font-size: 12px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.back-to-worktrees:hover {
+  color: #005ecb;
 }
 
 .detail-actions {
@@ -1075,10 +1094,30 @@ button.stat {
 }
 
 .change-list {
-  overflow: hidden;
+  overflow: auto;
   border: 1px solid var(--border);
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.74);
+}
+
+.changes-layout {
+  display: grid;
+  grid-template-columns: minmax(230px, 0.82fr) minmax(0, 1.18fr);
+  align-items: stretch;
+  min-height: 0;
+  gap: 10px;
+}
+
+.change-list-pane,
+.diff-pane {
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+}
+
+.changes-split .change-list,
+.changes-split .diff-section {
+  max-height: min(58dvh, 620px);
 }
 
 .change-row {
@@ -1140,8 +1179,9 @@ button.stat {
 .diff-section {
   display: grid;
   min-width: 0;
+  align-content: start;
   gap: 8px;
-  margin-top: 10px;
+  overflow: auto;
 }
 
 .diff-heading {
@@ -1181,7 +1221,7 @@ button.stat {
 .diff-preview {
   display: block;
   max-width: 100%;
-  max-height: 360px;
+  max-height: none;
   overflow: auto;
   margin: 0;
   border-radius: 8px;
@@ -1748,24 +1788,34 @@ button.stat {
 }
 
 @media (max-width: 1500px) {
-  .worktree-panel.with-changes {
-    grid-template-columns: 1fr;
-  }
-
   .worktree-detail {
     position: static;
     margin-top: 0;
+  }
+
+  .changes-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .changes-split .change-list,
+  .changes-split .diff-section {
+    max-height: 360px;
   }
 }
 
 @container (max-width: 560px) {
-  .worktree-panel.with-changes {
-    grid-template-columns: 1fr;
-  }
-
   .worktree-detail {
     position: static;
     margin-top: 0;
+  }
+
+  .changes-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .changes-split .change-list,
+  .changes-split .diff-section {
+    max-height: 360px;
   }
 
   .diff-heading {
