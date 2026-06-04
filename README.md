@@ -1,5 +1,8 @@
 # Worktree Console
 
+[![CI](https://github.com/duanduanc00-commits/worktree-console/actions/workflows/ci.yml/badge.svg)](https://github.com/duanduanc00-commits/worktree-console/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 Worktree Console is a local-first dashboard for registered Git projects. It helps you see which projects, worktrees, branches, and local services need attention without scanning every repository by hand.
 
 The app only tracks projects you register. Runtime data stays local and is ignored by Git.
@@ -35,11 +38,33 @@ The Vite dev server proxies `/api` to the local API server.
 ## Development Commands
 
 ```powershell
+npm ci
 npm test
 npm run build
 ```
 
 `npm test` runs the Vitest suite. `npm run build` runs TypeScript checking and a production Vite build.
+
+## Open Source And Safety
+
+Worktree Console is open source under the MIT License. See [LICENSE](LICENSE).
+
+Before contributing, read:
+
+- [CONTRIBUTING.md](CONTRIBUTING.md)
+- [SECURITY.md](SECURITY.md)
+- [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)
+
+Security and privacy boundaries:
+
+- The app tracks only projects you register.
+- The app does not scan the whole machine automatically.
+- The app does not upload registry or activity data.
+- Local runtime data can include private paths, commands, ports, and operation history.
+- Destructive Git actions must stay behind safety checks and confirmation.
+- Service controls do not stop external processes that were only detected by port.
+
+Pull requests are checked by GitHub Actions with `npm ci`, `npm test`, and `npm run build`.
 
 ## Git And Cleanup Safety
 

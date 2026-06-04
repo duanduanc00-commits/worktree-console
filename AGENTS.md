@@ -40,6 +40,19 @@ $env:WORKTREE_CONSOLE_ACTIVITY_LOG="C:\Users\you\AppData\Local\Worktree Console\
 
 Never commit `data/`, `work/`, `outputs/`, generated logs, or machine-specific registry files.
 
+## Open Source Files
+
+Keep these files present and aligned with behavior:
+
+- `LICENSE` uses MIT.
+- `CONTRIBUTING.md` describes local setup, validation, and contribution boundaries.
+- `SECURITY.md` describes private vulnerability reporting and local data privacy.
+- `CODE_OF_CONDUCT.md` describes project collaboration expectations.
+- `.github/workflows/ci.yml` runs `npm ci`, `npm test`, and `npm run build`.
+- `.github/ISSUE_TEMPLATE/` and `.github/PULL_REQUEST_TEMPLATE.md` guide public collaboration.
+
+When changing local data behavior, destructive actions, service controls, or Git cleanup safety, update `README.md`, `SECURITY.md`, and this file together.
+
 ## Architecture Notes
 
 - `src/server/app.ts` owns API routing and orchestration.
