@@ -61,7 +61,14 @@ import {
   serviceGroupStatusTone
 } from "./lib/service-groups-ui";
 import { branchWorktreeAssociation } from "./lib/branch-ui";
-import { groupHealthIssuesByProject, healthIssueLabel, healthIssueTone } from "./lib/health-ui";
+import {
+  groupHealthIssuesByProject,
+  healthIssueLabel,
+  healthIssueTone,
+  healthMetricMatchesIssue,
+  healthMetricTooltip,
+  type HealthMetricFilter
+} from "./lib/health-ui";
 import { diffLineTone } from "./lib/diff-ui";
 import type {
   ActivityEvent,
@@ -655,23 +662,48 @@ function HealthPanel({
   onInspectIssue: (issue: HealthIssue) => void;
 }) {
   const { counts, issues } = dashboard.health;
-  const issueGroups = groupHealthIssuesByProject(issues);
+  const [metricFilter, setMetricFilter] = useState<HealthMetricFilter | null>(null);
+  const filteredIssues = metricFilter
+    ? issues.filter((issue) => healthMetricMatchesIssue(metricFilter, issue))
+    : issues;
+  const issueGroups = groupHealthIssuesByProject(filteredIssues);
+  const metrics: Array<{ filter: HealthMetricFilter; label: string; value: number }> = [
+    { filter: "critical", label: "Critical", value: counts.critical },
+    { filter: "warning", label: "Warnings", value: counts.warning },
+    { filter: "cleanup", label: "Cleanup", value: counts.cleanupCandidates },
+    { filter: "stopped", label: "Stopped", value: counts.stoppedServices }
+  ];
 
   return (
     <section className="health-panel" aria-label="Project health">
       <section className="health-metrics" aria-label="Health summary">
-        <Metric label="Critical" value={counts.critical} />
-        <Metric label="Warnings" value={counts.warning} />
-        <Metric label="Cleanup" value={counts.cleanupCandidates} />
-        <Metric label="Stopped" value={counts.stoppedServices} />
+        {metrics.map((metric) => (
+          <HealthMetric
+            active={metricFilter === metric.filter}
+            filter={metric.filter}
+            key={metric.filter}
+            label={metric.label}
+            onClick={() => setMetricFilter((current) => (current === metric.filter ? null : metric.filter))}
+            value={metric.value}
+          />
+        ))}
       </section>
 
       {loading ? (
         <div className="empty-state compact">Refreshing project health...</div>
       ) : issues.length === 0 ? (
         <div className="empty-state compact">All registered projects look healthy.</div>
+      ) : filteredIssues.length === 0 ? (
+        <div className="empty-state compact">
+          No {metricFilter ? healthMetricEmptyLabel(metricFilter) : "matching"} issues right now.
+        </div>
       ) : (
         <div className="health-project-groups">
+          {metricFilter ? (
+            <div className="health-filter-note">
+              Showing {healthMetricFilterLabel(metricFilter)}. Click the card again to show all.
+            </div>
+          ) : null}
           {issueGroups.map((group) => (
             <section className="health-project-group" key={group.projectId}>
               <div className="health-project-heading">
@@ -699,6 +731,47 @@ function HealthPanel({
       )}
     </section>
   );
+}
+
+function HealthMetric({
+  active,
+  filter,
+  label,
+  onClick,
+  value
+}: {
+  active: boolean;
+  filter: HealthMetricFilter;
+  label: string;
+  onClick: () => void;
+  value: number;
+}) {
+  return (
+    <button
+      aria-pressed={active}
+      className={`stat health-stat explainable ${active ? "active" : ""}`}
+      data-tooltip={healthMetricTooltip(filter)}
+      onClick={onClick}
+      type="button"
+    >
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </button>
+  );
+}
+
+function healthMetricFilterLabel(filter: HealthMetricFilter) {
+  if (filter === "critical") return "critical issues";
+  if (filter === "warning") return "warnings";
+  if (filter === "cleanup") return "cleanup candidates";
+  return "stopped services";
+}
+
+function healthMetricEmptyLabel(filter: HealthMetricFilter) {
+  if (filter === "critical") return "critical";
+  if (filter === "warning") return "warning";
+  if (filter === "cleanup") return "cleanup";
+  return "stopped service";
 }
 
 function HealthIssueRow({

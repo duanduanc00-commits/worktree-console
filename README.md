@@ -1,29 +1,62 @@
 # Worktree Console
 
-A local-first console for tracking registered Git projects, their worktrees, branches, commits, and project services.
+Worktree Console is a local-first dashboard for registered Git projects. It helps you see which projects, worktrees, branches, and local services need attention without scanning every repository by hand.
+
+The app only tracks projects you register. Runtime data stays local and is ignored by Git.
 
 ## Features
 
 - Register only the local projects you want to track.
-- Review a Health view that groups missing projects, dirty worktrees, cleanup candidates, stopped services, and occupied ports.
-- Inspect Git branch, upstream, gone-upstream, ahead/behind, worktree, change, commit, and safe-removal status.
+- Review a Health view for missing projects, dirty checkouts, safe cleanup candidates, stopped services, and occupied ports.
+- Click Health summary cards to filter the issue list; hover or focus them for a short explanation of each count.
+- Inspect worktrees, local branches, upstream/gone-upstream state, ahead/behind counts, recent commits, and safe-removal status.
+- Associate branch rows with their owning worktree and open related changes when local modifications exist.
 - Open a bounded diff preview for changed worktree files without leaving the console.
-- Register project services and tasks with local commands, ports, health URLs, and log previews.
+- Choose recent commit count or time range for the main registered project checkout.
+- Register project services and one-shot tasks with local commands, ports, health URLs, and log previews.
 - Start, stop, restart, and open services from the console, with safer handling for externally started processes.
-- Group related services, then start, stop, restart, or remove the group while preserving individual service registrations.
+- Group related services into a stack, then start, stop, restart, or remove the group while preserving individual service registrations.
+- Review the Activity view for operations such as project changes, service actions, branch deletion, and worktree removal.
 
-## Development
+## Quick Start
 
 ```powershell
 npm install
 npm run dev
 ```
 
-The frontend runs on Vite and the API listens on `127.0.0.1:4217` by default.
+By default:
+
+- Frontend: `http://127.0.0.1:5273`
+- API: `http://127.0.0.1:4217`
+
+The Vite dev server proxies `/api` to the local API server.
+
+## Development Commands
+
+```powershell
+npm test
+npm run build
+```
+
+`npm test` runs the Vitest suite. `npm run build` runs TypeScript checking and a production Vite build.
+
+## Git And Cleanup Safety
+
+Worktree Console reads Git state from the registered project path and its linked worktrees. Destructive cleanup actions are intentionally conservative:
+
+- Worktrees and branches are marked as safe, review, or blocked before deletion controls appear.
+- Deletion actions require confirmation.
+- Dirty worktrees and the registered project checkout are blocked from one-click removal.
+- Branches currently used by a worktree are marked in use.
+
+Diff previews are bounded so the API does not return unbounded file diffs.
 
 ## Services
 
-Services are registered per project with a working directory, command, optional ports, and optional health URL. Services with ports behave like long-running local apps. Services without ports are shown as tasks and can be run once without showing unavailable stop/restart controls.
+Services are registered per project with a working directory, command, optional ports, and optional health URL.
+
+Services with ports behave like long-running local apps. Services without ports are shown as tasks and can be run once without showing unavailable stop/restart controls.
 
 Service groups collect existing project services into a named stack. Starting a group starts services in the saved order. Stopping a group stops services in reverse order. Restarting a group follows the same stop-then-start ordering. Removing a group only removes the grouping metadata; the individual services remain registered.
 
@@ -44,3 +77,22 @@ You can move these files outside the repository with environment variables:
 $env:WORKTREE_CONSOLE_REGISTRY="C:\Users\you\AppData\Local\Worktree Console\projects.json"
 $env:WORKTREE_CONSOLE_ACTIVITY_LOG="C:\Users\you\AppData\Local\Worktree Console\activity-log.json"
 ```
+
+You can also override the API port:
+
+```powershell
+$env:PORT="4217"
+npm run dev:api
+```
+
+If you change the API port, update the Vite proxy in `vite.config.ts` or run the frontend behind an equivalent proxy.
+
+## Project Layout
+
+- `src/App.tsx` contains the main React shell and local console views.
+- `src/components/ui/` contains the local shadcn-style primitives.
+- `src/lib/` contains client API wrappers and UI helper functions.
+- `src/server/` contains the Express API, Git readers, registry, service manager, activity log, and health summary builder.
+- `src/shared/types.ts` contains shared API and registry types.
+- `tests/` contains Vitest and supertest coverage for server behavior and UI helpers.
+- `docs/superpowers/plans/` contains implementation plans used during agent-driven development.

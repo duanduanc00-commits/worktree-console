@@ -7,6 +7,8 @@ export type HealthIssueProjectGroup = {
   issues: HealthIssue[];
 };
 
+export type HealthMetricFilter = "critical" | "warning" | "cleanup" | "stopped";
+
 export function healthIssueTone(severity: HealthIssueSeverity): "neutral" | "clean" | "dirty" | "error" {
   if (severity === "critical") return "error";
   if (severity === "warning") return "dirty";
@@ -45,4 +47,22 @@ export function groupHealthIssuesByProject(issues: HealthIssue[]): HealthIssuePr
   }
 
   return Array.from(groups.values());
+}
+
+export function healthMetricMatchesIssue(filter: HealthMetricFilter, issue: HealthIssue): boolean {
+  if (filter === "critical") return issue.severity === "critical";
+  if (filter === "warning") return issue.severity === "warning";
+  if (filter === "cleanup") return issue.kind === "cleanup-candidate";
+  return issue.kind === "stopped-service";
+}
+
+export function healthMetricTooltip(filter: HealthMetricFilter): string {
+  const tooltips: Record<HealthMetricFilter, string> = {
+    cleanup: "Items marked safe to delete.",
+    critical: "Missing projects or occupied ports.",
+    stopped: "Long-running services not active.",
+    warning: "Dirty projects, worktrees, or stopped services."
+  };
+
+  return tooltips[filter];
 }

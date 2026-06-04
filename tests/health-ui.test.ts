@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { groupHealthIssuesByProject, healthIssueLabel, healthIssueTone } from "../src/lib/health-ui";
+import {
+  groupHealthIssuesByProject,
+  healthIssueLabel,
+  healthIssueTone,
+  healthMetricMatchesIssue,
+  healthMetricTooltip
+} from "../src/lib/health-ui";
 import type { HealthIssue } from "../src/shared/types";
 
 describe("health-ui", () => {
@@ -32,6 +38,29 @@ describe("health-ui", () => {
         issues: [issues[1]]
       }
     ]);
+  });
+
+  it("matches summary metrics to the issues they filter", () => {
+    const critical = issue({ id: "missing", kind: "missing-project", severity: "critical" });
+    const warning = issue({ id: "dirty", kind: "dirty-project", severity: "warning" });
+    const cleanup = issue({ id: "cleanup", kind: "cleanup-candidate", severity: "info" });
+    const stopped = issue({ id: "stopped", kind: "stopped-service", severity: "warning" });
+
+    expect(healthMetricMatchesIssue("critical", critical)).toBe(true);
+    expect(healthMetricMatchesIssue("critical", warning)).toBe(false);
+    expect(healthMetricMatchesIssue("warning", warning)).toBe(true);
+    expect(healthMetricMatchesIssue("warning", stopped)).toBe(true);
+    expect(healthMetricMatchesIssue("cleanup", cleanup)).toBe(true);
+    expect(healthMetricMatchesIssue("cleanup", warning)).toBe(false);
+    expect(healthMetricMatchesIssue("stopped", stopped)).toBe(true);
+    expect(healthMetricMatchesIssue("stopped", warning)).toBe(false);
+  });
+
+  it("keeps health metric hints short", () => {
+    expect(healthMetricTooltip("critical")).toBe("Missing projects or occupied ports.");
+    expect(healthMetricTooltip("warning")).toBe("Dirty projects, worktrees, or stopped services.");
+    expect(healthMetricTooltip("cleanup")).toBe("Items marked safe to delete.");
+    expect(healthMetricTooltip("stopped")).toBe("Long-running services not active.");
   });
 });
 
