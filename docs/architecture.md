@@ -65,6 +65,7 @@ Destructive Git actions follow a conservative flow:
 
 - The API calculates a removal assessment before controls are enabled.
 - Dirty project checkouts and dirty worktrees are blocked from one-click cleanup.
+- Clean detached worktrees require review when their HEAD is not contained by any reported branch.
 - Branches currently used by a worktree are blocked from deletion.
 - Deletion actions require confirmation.
 - Diff previews are bounded and tied to files reported by the matching worktree snapshot.

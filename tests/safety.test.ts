@@ -21,6 +21,40 @@ describe("assessWorktreeRemoval", () => {
     ).toMatchObject({ level: "safe", canDelete: true });
   });
 
+  it("marks detached worktrees contained by a branch as safe", () => {
+    expect(
+      assessWorktreeRemoval(
+        {
+          path: "E:/repo/app/.worktrees/detached",
+          head: "abc",
+          branch: null,
+          detached: true,
+          baseRefs: ["feature/kept"],
+          clean: true,
+          dirtyFiles: 0
+        },
+        "E:/repo/app"
+      )
+    ).toMatchObject({ level: "safe", canDelete: true });
+  });
+
+  it("requires review before removing detached worktrees not contained by a branch", () => {
+    expect(
+      assessWorktreeRemoval(
+        {
+          path: "E:/repo/app/.worktrees/detached",
+          head: "abc",
+          branch: null,
+          detached: true,
+          baseRefs: [],
+          clean: true,
+          dirtyFiles: 0
+        },
+        "E:/repo/app"
+      )
+    ).toMatchObject({ level: "review", label: "Detached head", canDelete: false });
+  });
+
   it("requires review for dirty worktrees", () => {
     expect(
       assessWorktreeRemoval(

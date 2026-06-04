@@ -71,6 +71,7 @@ When changing local data behavior, destructive actions, service controls, Git cl
 
 - Keep the app local-first. Avoid adding remote telemetry, hosted storage, or background scanning unless explicitly requested.
 - Keep destructive Git cleanup conservative. Worktree and branch deletion must stay behind safety assessment and confirmation.
+- Detached worktrees should not be marked safe when their HEAD is not contained by any reported branch.
 - Do not stop external processes that were only detected by port. Service controls may stop processes started by this console.
 - Keep diff APIs bounded and only allow diffs for changed files reported by the corresponding worktree snapshot.
 - Health summary cards are interactive filters. Keep their labels and tooltip text short.

@@ -84,6 +84,7 @@ Worktree Console reads Git state from the registered project path and its linked
 - Worktrees and branches are marked as safe, review, or blocked before deletion controls appear.
 - Deletion actions require confirmation.
 - Dirty worktrees and the registered project checkout are blocked from one-click removal.
+- Clean detached worktrees are marked for review when their HEAD is not contained by any reported branch.
 - Branches currently used by a worktree are marked in use.
 
 Diff previews are bounded so the API does not return unbounded file diffs.

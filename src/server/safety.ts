@@ -15,6 +15,10 @@ export function assessWorktreeRemoval(worktree: WorktreeInfo, projectPath: strin
     return review("Has changes", [`${worktree.dirtyFiles ?? 0} changed files must be reviewed first.`]);
   }
 
+  if (worktree.detached && (worktree.baseRefs ?? []).length === 0) {
+    return review("Detached head", ["Detached HEAD is not contained by any reported branch. Confirm the commit is preserved before removing this worktree."]);
+  }
+
   return safe("Safe to remove", ["Worktree is clean and is not the registered project directory."]);
 }
 
