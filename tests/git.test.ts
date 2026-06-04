@@ -1,6 +1,21 @@
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+
 import { describe, expect, it } from "vitest";
 
-import { buildRecentCommitArgs, parseBranchStatus, parseShortStatusChanges, parseWorktreeList } from "../src/server/git";
+import {
+  buildRecentCommitArgs,
+  buildSyntheticUntrackedDiff,
+  handleBufferedDiffError,
+  readBoundedRegularFileDiff,
+  buildWorktreeDiffArgs,
+  limitDiffLines,
+  parseBranchTrackingRefs,
+  parseBranchStatus,
+  parseShortStatusChanges,
+  parseWorktreeList
+} from "../src/server/git";
 
 describe("parseBranchStatus", () => {
   it("parses the current branch, upstream, ahead/behind counts, and dirty file count", () => {
@@ -29,6 +44,52 @@ describe("parseBranchStatus", () => {
       dirtyFiles: 0,
       clean: true
     });
+  });
+});
+
+describe("parseBranchTrackingRefs", () => {
+  it("parses branch upstream and ahead/behind tracking details", () => {
+    const output = [
+      "main",
+      "",
+      "",
+      "\nfeature/ahead",
+      "origin/feature/ahead",
+      "[ahead 2]",
+      "\nfeature/behind",
+      "origin/feature/behind",
+      "[behind 3]",
+      "\nfeature/diverged",
+      "origin/feature/diverged",
+      "[ahead 2, behind 3]",
+      "\nteam/alice/feature-demo",
+      "origin/team/alice/feature-demo",
+      "[ahead 1]",
+      "\nfeature/pipe|name",
+      "origin/feature/pipe|name",
+      "[behind 1]"
+    ].join("\0");
+
+    expect(parseBranchTrackingRefs(output)).toEqual([
+      { name: "main", upstream: null, upstreamGone: false, ahead: 0, behind: 0 },
+      { name: "feature/ahead", upstream: "origin/feature/ahead", upstreamGone: false, ahead: 2, behind: 0 },
+      { name: "feature/behind", upstream: "origin/feature/behind", upstreamGone: false, ahead: 0, behind: 3 },
+      { name: "feature/diverged", upstream: "origin/feature/diverged", upstreamGone: false, ahead: 2, behind: 3 },
+      { name: "team/alice/feature-demo", upstream: "origin/team/alice/feature-demo", upstreamGone: false, ahead: 1, behind: 0 },
+      { name: "feature/pipe|name", upstream: "origin/feature/pipe|name", upstreamGone: false, ahead: 0, behind: 1 }
+    ]);
+  });
+
+  it("preserves gone upstream state instead of treating it as synchronized", () => {
+    expect(parseBranchTrackingRefs(["feature/gone", "origin/feature/gone", "[gone]"].join("\0"))).toEqual([
+      { name: "feature/gone", upstream: "origin/feature/gone", upstreamGone: true, ahead: 0, behind: 0 }
+    ]);
+  });
+
+  it("tolerates unexpected tracking text without throwing", () => {
+    expect(parseBranchTrackingRefs(["feature/weird", "origin/feature/weird", "[tracking weirdly]"].join("\0"))).toEqual([
+      { name: "feature/weird", upstream: "origin/feature/weird", upstreamGone: false, ahead: 0, behind: 0 }
+    ]);
   });
 });
 
@@ -72,6 +133,15 @@ describe("parseShortStatusChanges", () => {
       { code: "??", path: "tests/git.test.ts", raw: "?? tests/git.test.ts" }
     ]);
   });
+
+  it("parses nul-delimited status paths without quoted pseudo-paths", () => {
+    const output = " M src/café.txt\0?? docs/说明.md\0";
+
+    expect(parseShortStatusChanges(output)).toEqual([
+      { code: "M", path: "src/café.txt", raw: " M src/café.txt" },
+      { code: "??", path: "docs/说明.md", raw: "?? docs/说明.md" }
+    ]);
+  });
 });
 
 describe("buildRecentCommitArgs", () => {
@@ -90,5 +160,158 @@ describe("buildRecentCommitArgs", () => {
       "-50",
       "--pretty=format:%h%x1f%s%x1f%an%x1f%cr"
     ]);
+  });
+});
+
+describe("buildWorktreeDiffArgs", () => {
+  it("builds safe file diff args for a worktree-relative path", () => {
+    expect(buildWorktreeDiffArgs("src/App.tsx")).toEqual([
+      "diff",
+      "--no-ext-diff",
+      "--no-textconv",
+      "--",
+      "src/App.tsx"
+    ]);
+  });
+});
+
+describe("limitDiffLines", () => {
+  it("returns the full diff when it is within the max line count", () => {
+    expect(limitDiffLines("one\ntwo", 3)).toEqual({
+      diff: "one\ntwo",
+      truncated: false,
+      lineCount: 2
+    });
+  });
+
+  it("returns only the first max lines and reports the original line count when truncated", () => {
+    expect(limitDiffLines("one\ntwo\nthree", 2)).toEqual({
+      diff: "one\ntwo",
+      truncated: true,
+      lineCount: 3
+    });
+  });
+});
+
+describe("buildSyntheticUntrackedDiff", () => {
+  it("builds a symlink diff using only the link target text", () => {
+    expect(
+      buildSyntheticUntrackedDiff("src/config-link", {
+        kind: "symlink",
+        linkTarget: "../../secrets/config.json"
+      })
+    ).toBe(
+      [
+        "diff --git a/src/config-link b/src/config-link",
+        "new file mode 120000",
+        "--- /dev/null",
+        "+++ b/src/config-link",
+        "@@ -0,0 +1 @@",
+        "+../../secrets/config.json"
+      ].join("\n")
+    );
+  });
+
+  it("builds an unsupported-file diff message without file contents", () => {
+    expect(
+      buildSyntheticUntrackedDiff("src/generated", {
+        kind: "unsupported",
+        description: "directory"
+      })
+    ).toBe(
+      [
+        "diff --git a/src/generated b/src/generated",
+        "new file mode 000000",
+        "--- /dev/null",
+        "+++ b/src/generated",
+        "@@ -0,0 +1 @@",
+        "+Unsupported untracked directory; contents were not read."
+      ].join("\n")
+    );
+  });
+});
+
+describe("readBoundedRegularFileDiff", () => {
+  it("reads only enough regular file lines to return a bounded synthetic diff", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "worktree-console-diff-"));
+    try {
+      const filePath = join(tempDir, "large.txt");
+      await writeFile(filePath, ["line 1", "line 2", "line 3", "line 4", "line 5"].join("\n"));
+
+      const result = await readBoundedRegularFileDiff("large.txt", filePath, 7);
+
+      expect(result).toEqual({
+        diff: [
+          "diff --git a/large.txt b/large.txt",
+          "new file mode 100644",
+          "--- /dev/null",
+          "+++ b/large.txt",
+          "+line 1",
+          "+line 2",
+          "+line 3"
+        ].join("\n"),
+        truncated: true,
+        lineCount: 8
+      });
+      expect(result.diff).not.toContain("line 4");
+      expect(result.diff).not.toContain("line 5");
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("truncates long single-line regular file diffs by size", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "worktree-console-diff-"));
+    try {
+      const filePath = join(tempDir, "single-line.txt");
+      await writeFile(filePath, `${"a".repeat(32)}SECRET_AFTER_CAP`);
+
+      const result = await readBoundedRegularFileDiff("single-line.txt", filePath, 20, 16);
+
+      expect(result.truncated).toBe(true);
+      expect(result.lineCount).toBe(5);
+      expect(result.diff).toContain(`+${"a".repeat(16)}`);
+      expect(result.diff).not.toContain("SECRET_AFTER_CAP");
+      expect(result.diff.length).toBeLessThan(200);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("handleBufferedDiffError", () => {
+  it("returns bounded partial stdout when git diff exceeds maxBuffer", () => {
+    expect(
+      handleBufferedDiffError(
+        {
+          code: "ERR_CHILD_PROCESS_STDIO_MAXBUFFER",
+          stdout: "one\ntwo\nthree"
+        },
+        2
+      )
+    ).toEqual({
+      diff: "one\ntwo",
+      truncated: true,
+      lineCount: 3
+    });
+  });
+
+  it("returns a truncated explanatory message when overflow has no stdout", () => {
+    expect(
+      handleBufferedDiffError(
+        {
+          message: "stdout maxBuffer length exceeded"
+        },
+        200
+      )
+    ).toEqual({
+      diff: "Diff output exceeded the server buffer before any partial output was captured.",
+      truncated: true,
+      lineCount: 1
+    });
+  });
+
+  it("returns null for ordinary git failures", () => {
+    expect(handleBufferedDiffError({ code: 1, stderr: "fatal: bad revision" }, 200)).toBeNull();
   });
 });

@@ -1,5 +1,6 @@
-import { FormEvent, useEffect, useMemo, useState, type CSSProperties, type PointerEvent, type ReactNode } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent, type ReactNode } from "react";
 import {
+  Activity,
   Copy,
   ExternalLink,
   FolderOpen,
@@ -22,19 +23,25 @@ import {
 import {
   addProject,
   addService,
+  addServiceGroup,
   deleteBranch,
   deleteWorktree,
   getActivity,
   getDashboard,
   getProjectCommits,
   getServiceLogs,
+  getWorktreeDiff,
   openProjectFolder,
   openProjectTerminal,
   removeProject,
   removeService,
+  removeServiceGroup,
+  restartServiceGroup,
   restartService,
   selectFolder,
+  startServiceGroup,
   startService,
+  stopServiceGroup,
   stopService,
   updateProjectName
 } from "./lib/api";
@@ -47,14 +54,27 @@ import {
   serviceStatusTone,
   serviceUrl
 } from "./lib/service-ui";
+import {
+  serviceGroupActionDisabled,
+  serviceGroupActionLabel,
+  serviceGroupStatusLabel,
+  serviceGroupStatusTone
+} from "./lib/service-groups-ui";
+import { healthIssueLabel, healthIssueTone } from "./lib/health-ui";
+import { diffLineTone } from "./lib/diff-ui";
 import type {
   ActivityEvent,
   BranchInfo,
   DashboardResponse,
+  HealthIssue,
   ProjectSnapshot,
   RecentCommit,
   RemovalAssessment,
+  ServiceGroupAction,
+  ServiceGroupActionResponse,
+  ServiceGroupSnapshot,
   ServiceSnapshot,
+  WorktreeDiffResponse,
   WorktreeInfo
 } from "./shared/types";
 import { Badge } from "./components/ui/badge";
@@ -64,13 +84,27 @@ import { Input } from "./components/ui/input";
 import { SegmentedControl, SegmentButton } from "./components/ui/tabs";
 
 type StatusFilter = "all" | "clean" | "dirty" | "missing";
-type SidebarView = "projects" | "worktrees" | "registry" | "activity";
+type SidebarView = "health" | "projects" | "worktrees" | "registry" | "activity";
 type InspectorTab = "trees" | "branches" | "commits" | "services";
 type CommitRange = "24h" | "7d" | "30d" | "all";
 
 const emptyDashboard: DashboardResponse = {
   projects: [],
-  summary: { projects: 0, worktrees: 0, services: 0, runningServices: 0, dirty: 0, missing: 0, clean: 0 }
+  summary: { projects: 0, worktrees: 0, services: 0, runningServices: 0, dirty: 0, missing: 0, clean: 0 },
+  health: {
+    counts: {
+      critical: 0,
+      warning: 0,
+      info: 0,
+      dirtyProjects: 0,
+      dirtyWorktrees: 0,
+      cleanupCandidates: 0,
+      stoppedServices: 0,
+      occupiedPorts: 0,
+      missingProjects: 0
+    },
+    issues: []
+  }
 };
 
 export function App() {
@@ -179,9 +213,22 @@ export function App() {
   function handleViewChange(nextView: SidebarView) {
     setView(nextView);
     setTagFilter(null);
-    if (nextView === "worktrees" || nextView === "activity") {
+    if (nextView === "worktrees" || nextView === "activity" || nextView === "health") {
       setFilter("all");
     }
+  }
+
+  function handleInspectHealthIssue(issue: HealthIssue) {
+    setQuery("");
+    setFilter("all");
+    setTagFilter(null);
+    setSelectedId(issue.projectId);
+    if (issue.kind === "stopped-service" || issue.kind === "occupied-port") {
+      setInspectorTab("services");
+    } else {
+      setInspectorTab("trees");
+    }
+    setView("projects");
   }
 
   async function handleOpenFolder(project: ProjectSnapshot) {
@@ -254,7 +301,7 @@ export function App() {
             ) : null}
           </div>
 
-          {view !== "activity" ? (
+          {view !== "activity" && view !== "health" ? (
             <div className="toolbar-row">
               <label className="search-field">
                 <Search size={15} />
@@ -289,6 +336,12 @@ export function App() {
               events={activityEvents}
               loading={activityLoading}
               onRefresh={() => void refreshActivity()}
+            />
+          ) : view === "health" ? (
+            <HealthPanel
+              dashboard={dashboard}
+              loading={loading}
+              onInspectIssue={handleInspectHealthIssue}
             />
           ) : (
             <>
@@ -455,6 +508,10 @@ function Sidebar({
   return (
     <aside className="sidebar">
       <p className="side-label">Library</p>
+      <button className={`source ${view === "health" ? "active" : ""}`} onClick={() => onViewChange("health")}>
+        <Activity size={15} />
+        Health
+      </button>
       <button className={`source ${view === "projects" ? "active" : ""}`} onClick={() => onViewChange("projects")}>
         <LayoutDashboard size={15} />
         All Projects
@@ -579,6 +636,58 @@ function ActivityPanel({
               <time className="activity-time" dateTime={event.createdAt} title={formatActivityFullTime(event.createdAt)}>
                 {formatActivityTime(event.createdAt)}
               </time>
+            </article>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function HealthPanel({
+  dashboard,
+  loading,
+  onInspectIssue
+}: {
+  dashboard: DashboardResponse;
+  loading: boolean;
+  onInspectIssue: (issue: HealthIssue) => void;
+}) {
+  const { counts, issues } = dashboard.health;
+
+  return (
+    <section className="health-panel" aria-label="Project health">
+      <section className="health-metrics" aria-label="Health summary">
+        <Metric label="Critical" value={counts.critical} />
+        <Metric label="Warnings" value={counts.warning} />
+        <Metric label="Cleanup" value={counts.cleanupCandidates} />
+        <Metric label="Stopped" value={counts.stoppedServices} />
+      </section>
+
+      {loading ? (
+        <div className="empty-state compact">Refreshing project health...</div>
+      ) : issues.length === 0 ? (
+        <div className="empty-state compact">All registered projects look healthy.</div>
+      ) : (
+        <div className="health-list">
+          {issues.map((issue) => (
+            <article className="health-row" key={issue.id}>
+              <div className="health-main">
+                <div className="health-title">
+                  <strong>{issue.title}</strong>
+                  <Badge tone={healthIssueTone(issue.severity)}>{healthIssueLabel(issue.kind)}</Badge>
+                </div>
+                <div className="health-meta">
+                  <span>{issue.projectName}</span>
+                  <span aria-hidden="true">/</span>
+                  <span>{healthTargetLabel(issue, dashboard.projects)}</span>
+                </div>
+                <div className="health-detail">{issue.detail}</div>
+              </div>
+              <div className="health-actions">
+                <Badge tone={healthIssueTone(issue.severity)}>{severityLabel(issue.severity)}</Badge>
+                <Button onClick={() => onInspectIssue(issue)}>{issue.actionLabel ?? "Inspect"}</Button>
+              </div>
             </article>
           ))}
         </div>
@@ -834,19 +943,130 @@ function WorktreePanel({
           )}
         </div>
       </div>
-      {selectedWorktree ? <WorktreeChanges onClose={() => setSelectedPath(null)} worktree={selectedWorktree} /> : null}
+      {selectedWorktree ? (
+        <WorktreeChanges projectId={project.id} onClose={() => setSelectedPath(null)} worktree={selectedWorktree} />
+      ) : null}
     </section>
   );
 }
 
 function WorktreeChanges({
   onClose,
+  projectId,
   worktree
 }: {
   onClose: () => void;
+  projectId: string;
   worktree: NonNullable<ProjectSnapshot["worktrees"][number]>;
 }) {
   const changes = worktree.changes ?? [];
+  const [selectedFile, setSelectedFile] = useState<string | null>(null);
+  const [diff, setDiff] = useState<WorktreeDiffResponse | null>(null);
+  const [diffLoading, setDiffLoading] = useState(false);
+  const [diffError, setDiffError] = useState<string | null>(null);
+  const [copiedPath, setCopiedPath] = useState<string | null>(null);
+  const [copyError, setCopyError] = useState<string | null>(null);
+  const diffRequestId = useRef(0);
+  const copyRequestId = useRef(0);
+  const copyFeedbackTimer = useRef<number | null>(null);
+  const changePathsKey = changes.map((change) => change.path).join("\u0000");
+
+  useEffect(() => {
+    resetDiffState();
+
+    return () => {
+      diffRequestId.current += 1;
+      copyRequestId.current += 1;
+      clearCopyFeedbackTimer();
+    };
+  }, [projectId, worktree.path]);
+
+  useEffect(() => {
+    if (!selectedFile || changes.some((change) => change.path === selectedFile)) return;
+    resetDiffState();
+  }, [changePathsKey, selectedFile]);
+
+  function clearCopyFeedbackTimer() {
+    if (copyFeedbackTimer.current === null) return;
+    window.clearTimeout(copyFeedbackTimer.current);
+    copyFeedbackTimer.current = null;
+  }
+
+  function resetDiffState() {
+    diffRequestId.current += 1;
+    copyRequestId.current += 1;
+    clearCopyFeedbackTimer();
+    setSelectedFile(null);
+    setDiff(null);
+    setDiffLoading(false);
+    setDiffError(null);
+    setCopiedPath(null);
+    setCopyError(null);
+  }
+
+  async function loadDiff(filePath: string) {
+    const requestId = diffRequestId.current + 1;
+    diffRequestId.current = requestId;
+    copyRequestId.current += 1;
+    clearCopyFeedbackTimer();
+    setSelectedFile(filePath);
+    setDiff(null);
+    setDiffLoading(true);
+    setDiffError(null);
+    setCopiedPath(null);
+    setCopyError(null);
+
+    try {
+      const nextDiff = await getWorktreeDiff(projectId, worktree.path, filePath);
+      if (diffRequestId.current !== requestId) return;
+      setDiff(nextDiff);
+    } catch (caught) {
+      if (diffRequestId.current !== requestId) return;
+      setDiffError((caught as Error).message);
+    } finally {
+      if (diffRequestId.current === requestId) {
+        setDiffLoading(false);
+      }
+    }
+  }
+
+  async function copySelectedPath() {
+    if (!selectedFile) return;
+
+    const filePath = selectedFile;
+    const requestId = copyRequestId.current + 1;
+    copyRequestId.current = requestId;
+    clearCopyFeedbackTimer();
+    setCopiedPath(null);
+    setCopyError(null);
+
+    if (!navigator.clipboard?.writeText) {
+      setCopyError("Clipboard is unavailable in this browser.");
+      return;
+    }
+
+    try {
+      await navigator.clipboard.writeText(filePath);
+      if (copyRequestId.current !== requestId) return;
+      setCopiedPath(filePath);
+      copyFeedbackTimer.current = window.setTimeout(() => {
+        if (copyRequestId.current !== requestId) return;
+        setCopiedPath((current) => (current === filePath ? null : current));
+        copyFeedbackTimer.current = null;
+      }, 1600);
+    } catch (caught) {
+      if (copyRequestId.current !== requestId) return;
+      setCopyError((caught as Error).message || "Could not copy path.");
+    }
+  }
+
+  function copyStatusLabel() {
+    if (copyError) return copyError;
+    if (diff?.truncated) return `Showing a bounded preview of ${diff.lineCount} diff lines.`;
+    return null;
+  }
+
+  const copyStatus = copyStatusLabel();
 
   return (
     <section className="worktree-detail">
@@ -865,16 +1085,67 @@ function WorktreeChanges({
       {changes.length === 0 ? (
         <div className="empty-state compact">No local changes in this worktree.</div>
       ) : (
-        <div className="change-list">
-          {changes.map((change) => (
-            <div className="change-row" key={`${change.code}-${change.path}`}>
-              <span className={`change-code ${changeTone(change.code)}`}>{change.code}</span>
-              <span className="mono">{change.path}</span>
-            </div>
-          ))}
-        </div>
+        <>
+          <div className="change-list">
+            {changes.map((change) => (
+              <button
+                className={`change-row ${selectedFile === change.path ? "selected" : ""}`}
+                key={`${change.code}-${change.path}`}
+                onClick={() => void loadDiff(change.path)}
+                type="button"
+              >
+                <span className={`change-code ${changeTone(change.code)}`}>{change.code}</span>
+                <span className="mono">{change.path}</span>
+              </button>
+            ))}
+          </div>
+          <div className="diff-section" aria-live="polite">
+            {selectedFile ? (
+              <div className="diff-heading">
+                <div className="diff-file">
+                  <strong>{selectedFile}</strong>
+                  {copyStatus ? (
+                    <span className={`diff-note ${copyError ? "error" : ""}`}>{copyStatus}</span>
+                  ) : null}
+                </div>
+                <span className="detail-actions">
+                  {diff?.truncated ? <Badge tone="dirty">Truncated</Badge> : null}
+                  <Button title="Copy selected file path" onClick={() => void copySelectedPath()}>
+                    <Copy size={13} />
+                    {copiedPath === selectedFile ? "Copied" : "Copy path"}
+                  </Button>
+                </span>
+              </div>
+            ) : null}
+            {diffLoading ? (
+              <div className="empty-state compact">Loading diff...</div>
+            ) : diffError ? (
+              <div className="error-banner compact">{diffError}</div>
+            ) : diff ? (
+              <DiffPreview diff={diff} />
+            ) : (
+              <div className="empty-state compact">Select a changed file to preview its diff.</div>
+            )}
+          </div>
+        </>
       )}
     </section>
+  );
+}
+
+function DiffPreview({ diff }: { diff: WorktreeDiffResponse }) {
+  if (diff.diff.trim().length === 0) {
+    return <div className="empty-state compact">No text diff available for this file.</div>;
+  }
+
+  return (
+    <pre className="diff-preview" aria-label={`Diff preview for ${diff.filePath}`}>
+      {diff.diff.split(/\r?\n/).map((line, index) => (
+        <span className={`diff-line ${diffLineTone(line)}`} key={index}>
+          {line.length === 0 ? " " : line}
+        </span>
+      ))}
+    </pre>
   );
 }
 
@@ -892,32 +1163,41 @@ function BranchPanel({
         {project.branches.length === 0 ? (
           <div className="empty-state compact">No branches available.</div>
         ) : (
-          project.branches.map((branch) => (
-            <div className="branch-row" key={branch.name}>
-              <div className="branch-main">
-                <strong>{branch.name}</strong>
-                <ExplainableText className="branch-meta" tooltip={branchMetaTooltip(branch)}>
-                  {branchMetaLabel(branch)}
-                </ExplainableText>
+          project.branches.map((branch) => {
+            const trackingLabel = branchTrackingLabel(branch);
+
+            return (
+              <div className="branch-row" key={branch.name}>
+                <div className="branch-main">
+                  <strong>{branch.name}</strong>
+                  <ExplainableText className="branch-meta" tooltip={branchMetaTooltip(branch)}>
+                    {branchMetaLabel(branch)}
+                  </ExplainableText>
+                  {trackingLabel ? (
+                    <ExplainableText className="branch-meta branch-tracking" tooltip={branchTrackingTooltip(branch)}>
+                      {trackingLabel}
+                    </ExplainableText>
+                  ) : null}
+                </div>
+                <span className="branch-actions">
+                  <ExplainableBadge align="right" tone={removalTone(branch.removal.level)} tooltip={removalTooltip(branch.removal)}>
+                    {branch.removal.label}
+                  </ExplainableBadge>
+                  {branch.removal.canDelete ? (
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      aria-label={`Delete branch ${branch.name}`}
+                      title={`Delete branch ${branch.name}`}
+                      onClick={() => onDeleteBranch(project, branch)}
+                    >
+                      <Trash2 size={14} />
+                    </Button>
+                  ) : null}
+                </span>
               </div>
-              <span className="branch-actions">
-                <ExplainableBadge align="right" tone={removalTone(branch.removal.level)} tooltip={removalTooltip(branch.removal)}>
-                  {branch.removal.label}
-                </ExplainableBadge>
-                {branch.removal.canDelete ? (
-                  <Button
-                    size="icon"
-                    variant="ghost"
-                    aria-label={`Delete branch ${branch.name}`}
-                    title={`Delete branch ${branch.name}`}
-                    onClick={() => onDeleteBranch(project, branch)}
-                  >
-                    <Trash2 size={14} />
-                  </Button>
-                ) : null}
-              </span>
-            </div>
-          ))
+            );
+          })
         )}
       </div>
     </section>
@@ -1003,9 +1283,33 @@ function ServicePanel({
   onServiceChanged: (message: string) => Promise<void>;
 }) {
   const [busyServiceId, setBusyServiceId] = useState<string | null>(null);
+  const groupBusyRef = useRef(false);
+  const groupActionRequestId = useRef(0);
+  const keepGroupErrorsForNextSnapshot = useRef(false);
+  const [groupBusy, setGroupBusy] = useState<{ id: string; action: ServiceGroupAction | "delete" } | null>(null);
+  const [groupDialogOpen, setGroupDialogOpen] = useState(false);
+  const [groupErrors, setGroupErrors] = useState<Record<string, string>>({});
   const [expandedLogs, setExpandedLogs] = useState<string | null>(null);
   const [logLines, setLogLines] = useState<Record<string, string[]>>({});
   const [error, setError] = useState<string | null>(null);
+  const serviceGroups = project.serviceGroups ?? [];
+
+  useEffect(() => {
+    groupActionRequestId.current += 1;
+    groupBusyRef.current = false;
+    keepGroupErrorsForNextSnapshot.current = false;
+    setGroupBusy(null);
+    setGroupDialogOpen(false);
+    setGroupErrors({});
+  }, [project.id]);
+
+  useEffect(() => {
+    if (keepGroupErrorsForNextSnapshot.current) {
+      keepGroupErrorsForNextSnapshot.current = false;
+      return;
+    }
+    setGroupErrors({});
+  }, [project.serviceGroups]);
 
   async function runServiceAction(service: ServiceSnapshot, actionName: "start" | "stop" | "restart") {
     setBusyServiceId(service.id);
@@ -1028,6 +1332,76 @@ function ServicePanel({
     }
   }
 
+  async function runGroupAction(group: ServiceGroupSnapshot, actionName: ServiceGroupAction) {
+    if (groupBusyRef.current) return;
+
+    const requestId = groupActionRequestId.current + 1;
+    groupActionRequestId.current = requestId;
+    groupBusyRef.current = true;
+    setGroupBusy({ id: group.id, action: actionName });
+    setGroupErrors((current) => {
+      const next = { ...current };
+      delete next[group.id];
+      return next;
+    });
+    try {
+      const response =
+        actionName === "start"
+          ? await startServiceGroup(project.id, group.id)
+          : actionName === "stop"
+            ? await stopServiceGroup(project.id, group.id)
+            : await restartServiceGroup(project.id, group.id);
+      if (groupActionRequestId.current !== requestId) return;
+      const errorSummary = serviceGroupActionErrorSummary(response);
+      if (errorSummary) {
+        keepGroupErrorsForNextSnapshot.current = true;
+        setGroupErrors((current) => ({ ...current, [group.id]: errorSummary }));
+      }
+      await onServiceChanged(serviceGroupActionNotice(response));
+    } catch (caught) {
+      if (groupActionRequestId.current === requestId) {
+        setGroupErrors((current) => ({ ...current, [group.id]: (caught as Error).message }));
+      }
+    } finally {
+      if (groupActionRequestId.current === requestId) {
+        groupBusyRef.current = false;
+        setGroupBusy(null);
+      }
+    }
+  }
+
+  async function deleteGroup(group: ServiceGroupSnapshot) {
+    const confirmed = window.confirm(
+      `Remove service group "${group.name}"? The individual service registrations will remain.`
+    );
+    if (!confirmed) return;
+    if (groupBusyRef.current) return;
+
+    const requestId = groupActionRequestId.current + 1;
+    groupActionRequestId.current = requestId;
+    groupBusyRef.current = true;
+    setGroupBusy({ id: group.id, action: "delete" });
+    setGroupErrors((current) => {
+      const next = { ...current };
+      delete next[group.id];
+      return next;
+    });
+    try {
+      await removeServiceGroup(project.id, group.id);
+      if (groupActionRequestId.current !== requestId) return;
+      await onServiceChanged(`Removed service group ${group.name}.`);
+    } catch (caught) {
+      if (groupActionRequestId.current === requestId) {
+        setGroupErrors((current) => ({ ...current, [group.id]: (caught as Error).message }));
+      }
+    } finally {
+      if (groupActionRequestId.current === requestId) {
+        groupBusyRef.current = false;
+        setGroupBusy(null);
+      }
+    }
+  }
+
   async function refreshLogs(service: ServiceSnapshot) {
     setBusyServiceId(service.id);
     setError(null);
@@ -1046,12 +1420,107 @@ function ServicePanel({
     <section className="section service-panel">
       <div className="section-heading">
         <h3>Services</h3>
-        <Button onClick={() => onAddService(project)}>
-          <Plus size={14} />
-          Add Service
-        </Button>
+        <div className="section-actions">
+          <Button
+            disabled={project.services.length === 0}
+            title={project.services.length === 0 ? "Add a service before creating a group" : "Add service group"}
+            onClick={() => setGroupDialogOpen(true)}
+          >
+            <Plus size={14} />
+            Add Service Group
+          </Button>
+          <Button onClick={() => onAddService(project)}>
+            <Plus size={14} />
+            Add Service
+          </Button>
+        </div>
       </div>
       {error ? <div className="error-banner compact">{error}</div> : null}
+      <div className="service-groups">
+        <div className="service-subheading">Service Groups</div>
+        {project.services.length === 0 ? (
+          <div className="empty-state compact">Add services before grouping them.</div>
+        ) : serviceGroups.length === 0 ? (
+          <div className="empty-state compact">No service groups yet.</div>
+        ) : (
+          <div className="service-group-list">
+            {serviceGroups.map((group) => {
+              const groupActionBusy = groupBusy !== null;
+              const activeGroupBusy = groupBusy?.id === group.id;
+              const serviceCount = group.services.length;
+              const groupError = groupErrors[group.id];
+              return (
+                <article className="service-group-card" key={group.id}>
+                  <div className="service-group-top">
+                    <div className="service-group-main">
+                      <strong title={group.name}>{group.name}</strong>
+                    </div>
+                    <span className="service-badges">
+                      <Badge tone={serviceGroupStatusTone(group.status)}>
+                        {serviceGroupStatusLabel(group.status)}
+                      </Badge>
+                      <Badge>{serviceCountLabel(group.serviceIds.length)}</Badge>
+                    </span>
+                  </div>
+
+                  <div className="service-member-list" aria-label={`${group.name} services`}>
+                    {group.services.length === 0 ? (
+                      <span className="service-member-chip muted">
+                        <span>No services</span>
+                      </span>
+                    ) : (
+                      group.services.map((service) => (
+                        <span className="service-member-chip" key={service.id} title={service.name}>
+                          <span>{service.name}</span>
+                        </span>
+                      ))
+                    )}
+                  </div>
+
+                  <div className="service-group-actions">
+                    <Button
+                      disabled={groupActionBusy || serviceGroupActionDisabled("start", group.status, serviceCount)}
+                      title="Start group"
+                      onClick={() => void runGroupAction(group, "start")}
+                    >
+                      <Play size={14} />
+                      {serviceGroupActionLabel("start", activeGroupBusy && groupBusy?.action === "start")}
+                    </Button>
+                    <Button
+                      disabled={groupActionBusy || serviceGroupActionDisabled("stop", group.status, serviceCount)}
+                      title="Stop group"
+                      onClick={() => void runGroupAction(group, "stop")}
+                    >
+                      <Square size={13} />
+                      {serviceGroupActionLabel("stop", activeGroupBusy && groupBusy?.action === "stop")}
+                    </Button>
+                    <Button
+                      disabled={groupActionBusy || serviceGroupActionDisabled("restart", group.status, serviceCount)}
+                      title="Restart group"
+                      onClick={() => void runGroupAction(group, "restart")}
+                    >
+                      <RotateCcw size={14} />
+                      {serviceGroupActionLabel("restart", activeGroupBusy && groupBusy?.action === "restart")}
+                    </Button>
+                    <Button
+                      aria-label={`Remove service group ${group.name}`}
+                      disabled={groupActionBusy}
+                      size="icon"
+                      title={`Remove service group ${group.name}`}
+                      variant="ghost"
+                      onClick={() => void deleteGroup(group)}
+                    >
+                      <Trash2 size={14} />
+                    </Button>
+                  </div>
+                  {groupError ? <div className="error-banner compact service-group-error">{groupError}</div> : null}
+                </article>
+              );
+            })}
+          </div>
+        )}
+      </div>
+      <div className="service-subheading">Individual Services</div>
       {project.services.length === 0 ? (
         <div className="empty-state compact">No services registered for this project.</div>
       ) : (
@@ -1156,8 +1625,40 @@ function ServicePanel({
           })}
         </div>
       )}
+      <AddServiceGroupDialog
+        open={groupDialogOpen}
+        project={project}
+        onOpenChange={setGroupDialogOpen}
+        onAdded={async (groupName) => {
+          setGroupDialogOpen(false);
+          await onServiceChanged(`Added service group ${groupName}.`);
+        }}
+      />
     </section>
   );
+}
+
+function serviceCountLabel(count: number) {
+  return `${count} service${count === 1 ? "" : "s"}`;
+}
+
+function serviceGroupActionNotice(response: ServiceGroupActionResponse) {
+  const actionLabel =
+    response.action === "start" ? "Started group" : response.action === "stop" ? "Stopped group" : "Restarted group";
+  if (response.errors.length === 0) {
+    return `${actionLabel} ${response.groupName}.`;
+  }
+  return `${actionLabel} ${response.groupName} with ${response.errors.length} failed.`;
+}
+
+function serviceGroupActionErrorSummary(response: ServiceGroupActionResponse) {
+  if (response.errors.length === 0) return null;
+  const details = response.errors
+    .slice(0, 3)
+    .map((result) => `${result.serviceName}: ${result.error ?? "failed"}`)
+    .join("; ");
+  const remainder = response.errors.length > 3 ? `; +${response.errors.length - 3} more` : "";
+  return `${response.errors.length} ${response.errors.length === 1 ? "service" : "services"} failed: ${details}${remainder}`;
 }
 
 function AddProjectDialog({
@@ -1304,6 +1805,109 @@ function EditProjectDialog({
           </Button>
           <Button disabled={submitting} type="submit" variant="primary">
             {submitting ? "Saving..." : "Save Name"}
+          </Button>
+        </footer>
+      </form>
+    </Dialog>
+  );
+}
+
+function AddServiceGroupDialog({
+  onAdded,
+  onOpenChange,
+  open,
+  project
+}: {
+  project: ProjectSnapshot;
+  open: boolean;
+  onAdded: (groupName: string) => Promise<void>;
+  onOpenChange: (open: boolean) => void;
+}) {
+  const [name, setName] = useState("");
+  const [selectedServiceIds, setSelectedServiceIds] = useState<string[]>([]);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (open) {
+      setName("");
+      setSelectedServiceIds([]);
+      setSubmitting(false);
+      setError(null);
+    }
+  }, [open, project.id]);
+
+  async function handleSubmit(event: FormEvent) {
+    event.preventDefault();
+    const groupName = name.trim();
+    const availableServiceIds = new Set(project.services.map((service) => service.id));
+    const serviceIds = selectedServiceIds.filter((serviceId) => availableServiceIds.has(serviceId));
+
+    if (!groupName) {
+      setError("Group name is required.");
+      return;
+    }
+    if (serviceIds.length === 0) {
+      setError("Select at least one service.");
+      return;
+    }
+
+    setSubmitting(true);
+    setError(null);
+    try {
+      const group = await addServiceGroup(project.id, { name: groupName, serviceIds });
+      await onAdded(group.name);
+    } catch (caught) {
+      setError((caught as Error).message);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  function toggleService(serviceId: string) {
+    setSelectedServiceIds((current) =>
+      current.includes(serviceId)
+        ? current.filter((candidate) => candidate !== serviceId)
+        : [...current, serviceId]
+    );
+  }
+
+  return (
+    <Dialog open={open} title="Add Service Group" onOpenChange={onOpenChange}>
+      <form className="project-form" onSubmit={(event) => void handleSubmit(event)}>
+        <label>
+          <span>Group name</span>
+          <Input required placeholder="Core services" value={name} onChange={(event) => setName(event.target.value)} />
+        </label>
+        <div className="service-checklist-field">
+          <span>Services</span>
+          {project.services.length === 0 ? (
+            <div className="empty-state compact">No services registered.</div>
+          ) : (
+            <div className="service-checklist">
+              {project.services.map((service) => (
+                <label className="service-check-option" key={service.id}>
+                  <input
+                    checked={selectedServiceIds.includes(service.id)}
+                    type="checkbox"
+                    onChange={() => toggleService(service.id)}
+                  />
+                  <span className="service-check-text">
+                    <strong>{service.name}</strong>
+                    <span className="mono">{service.command}</span>
+                  </span>
+                </label>
+              ))}
+            </div>
+          )}
+        </div>
+        {error ? <div className="error-banner compact">{error}</div> : null}
+        <footer className="dialog-footer">
+          <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>
+            Cancel
+          </Button>
+          <Button disabled={submitting || project.services.length === 0} type="submit" variant="primary">
+            {submitting ? "Adding..." : "Add Group"}
           </Button>
         </footer>
       </form>
@@ -1517,6 +2121,7 @@ function labelStatus(status: ProjectSnapshot["status"] | StatusFilter) {
 
 function viewTitle(view: SidebarView, tagFilter: string | null) {
   if (tagFilter) return tagFilter;
+  if (view === "health") return "Health";
   if (view === "activity") return "Activity";
   if (view === "worktrees") return "Worktrees";
   if (view === "registry") return "Registry";
@@ -1524,10 +2129,28 @@ function viewTitle(view: SidebarView, tagFilter: string | null) {
 }
 
 function viewSubtitle(view: SidebarView) {
+  if (view === "health") return "Actionable local project health across worktrees, services, and cleanup.";
   if (view === "activity") return "Recent operations performed through this console.";
   if (view === "worktrees") return "Registered repositories grouped by local worktree activity.";
   if (view === "registry") return "Manage registered repositories and remove entries you no longer track.";
   return "Registered repositories, local branches, and worktree activity.";
+}
+
+function severityLabel(severity: HealthIssue["severity"]) {
+  if (severity === "critical") return "Critical";
+  if (severity === "warning") return "Warning";
+  return "Info";
+}
+
+function healthTargetLabel(issue: HealthIssue, projects: ProjectSnapshot[]) {
+  const project = projects.find((candidate) => candidate.id === issue.projectId);
+
+  if (issue.targetType === "service" && issue.target) {
+    return project?.services.find((service) => service.id === issue.target)?.name ?? issue.target;
+  }
+
+  if (issue.targetType === "project") return issue.projectPath;
+  return issue.target ?? issue.projectPath;
 }
 
 function activityActionLabel(actionName: string) {
@@ -1537,6 +2160,12 @@ function activityActionLabel(actionName: string) {
     "project.remove": "Project",
     "project.update": "Project",
     "service.add": "Service",
+    "service-group.add": "Service Group",
+    "service-group.remove": "Service Group",
+    "service-group.restart": "Service Group",
+    "service-group.start": "Service Group",
+    "service-group.stop": "Service Group",
+    "service-group.update": "Service Group",
     "service.remove": "Service",
     "service.restart": "Service",
     "service.start": "Service",
@@ -1549,6 +2178,7 @@ function activityActionLabel(actionName: string) {
 function activityTargetLabel(targetType: ActivityEvent["targetType"]) {
   if (targetType === "branch") return "branch";
   if (targetType === "service") return "service";
+  if (targetType === "service-group") return "service group";
   if (targetType === "worktree") return "worktree";
   return "project";
 }
@@ -1635,6 +2265,38 @@ function branchMetaTooltip(branch: BranchInfo) {
     branch.usedByWorktree ? "A local worktree is using it, so branch deletion is blocked." : "No registered worktree is using it."
   ];
   return details.join(" ");
+}
+
+function branchTrackingLabel(branch: BranchInfo) {
+  if (branch.upstreamGone) {
+    return branch.upstream ? `upstream ${branch.upstream} · gone` : "upstream gone";
+  }
+  if (!branch.upstream) return null;
+
+  const parts = [`upstream ${branch.upstream}`];
+  if ((branch.ahead ?? 0) > 0) parts.push(`ahead ${branch.ahead}`);
+  if ((branch.behind ?? 0) > 0) parts.push(`behind ${branch.behind}`);
+  return parts.join(" · ");
+}
+
+function branchTrackingTooltip(branch: BranchInfo) {
+  if (branch.upstreamGone) {
+    return branch.upstream
+      ? `Configured upstream ${branch.upstream} no longer exists.`
+      : "The configured upstream no longer exists.";
+  }
+  if (!branch.upstream) return "No upstream branch is configured.";
+
+  const ahead = branch.ahead ?? 0;
+  const behind = branch.behind ?? 0;
+  if (ahead === 0 && behind === 0) {
+    return `Tracks ${branch.upstream}. Git did not report any ahead or behind commits.`;
+  }
+
+  const parts = [`Tracks ${branch.upstream}.`];
+  if (ahead > 0) parts.push(`${ahead} commit(s) ahead of upstream.`);
+  if (behind > 0) parts.push(`${behind} commit(s) behind upstream.`);
+  return parts.join(" ");
 }
 
 function worktreeChangeTooltip(worktree: WorktreeInfo) {

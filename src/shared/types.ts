@@ -5,6 +5,7 @@ export type RegisteredProject = {
   tags: string[];
   pinned: boolean;
   services: RegisteredService[];
+  serviceGroups: RegisteredServiceGroup[];
   createdAt: string;
   updatedAt: string;
 };
@@ -16,6 +17,14 @@ export type RegisteredService = {
   command: string;
   ports: number[];
   healthUrl: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type RegisteredServiceGroup = {
+  id: string;
+  name: string;
+  serviceIds: string[];
   createdAt: string;
   updatedAt: string;
 };
@@ -48,6 +57,10 @@ export type BranchInfo = {
   protected: boolean;
   merged: boolean;
   usedByWorktree: boolean;
+  upstream?: string | null;
+  upstreamGone?: boolean;
+  ahead?: number;
+  behind?: number;
   removal: RemovalAssessment;
 };
 
@@ -62,6 +75,14 @@ export type WorktreeChange = {
   code: string;
   path: string;
   raw: string;
+};
+
+export type WorktreeDiffResponse = {
+  worktreePath: string;
+  filePath: string;
+  diff: string;
+  truncated: boolean;
+  lineCount: number;
 };
 
 export type RecentCommit = {
@@ -87,7 +108,35 @@ export type ServiceSnapshot = RegisteredService & {
   error?: string;
 };
 
-export type ProjectSnapshot = Omit<RegisteredProject, "services"> & {
+export type ServiceGroupStatus = "running" | "partial" | "stopped" | "error";
+
+export type ServiceGroupSnapshot = RegisteredServiceGroup & {
+  services: ServiceSnapshot[];
+  status: ServiceGroupStatus;
+};
+
+export type ServiceGroupAction = "start" | "stop" | "restart";
+
+export type ServiceGroupActionOperation = "start" | "stop";
+
+export type ServiceGroupActionResult = {
+  serviceId: string;
+  serviceName: string;
+  operation: ServiceGroupActionOperation;
+  ok: boolean;
+  snapshot?: ServiceSnapshot;
+  error?: string;
+};
+
+export type ServiceGroupActionResponse = {
+  groupId: string;
+  groupName: string;
+  action: ServiceGroupAction;
+  results: ServiceGroupActionResult[];
+  errors: ServiceGroupActionResult[];
+};
+
+export type ProjectSnapshot = Omit<RegisteredProject, "services" | "serviceGroups"> & {
   exists: boolean;
   isGitRepository: boolean;
   status: "clean" | "dirty" | "missing" | "error";
@@ -96,6 +145,7 @@ export type ProjectSnapshot = Omit<RegisteredProject, "services"> & {
   branches: BranchInfo[];
   recentCommits: RecentCommit[];
   services: ServiceSnapshot[];
+  serviceGroups?: ServiceGroupSnapshot[];
   error?: string;
 };
 
@@ -109,12 +159,52 @@ export type DashboardSummary = {
   clean: number;
 };
 
+export type HealthIssueKind =
+  | "missing-project"
+  | "dirty-project"
+  | "dirty-worktree"
+  | "cleanup-candidate"
+  | "stopped-service"
+  | "occupied-port";
+
+export type HealthIssueSeverity = "info" | "warning" | "critical";
+
+export type HealthIssue = {
+  id: string;
+  kind: HealthIssueKind;
+  severity: HealthIssueSeverity;
+  title: string;
+  detail: string;
+  projectId: string;
+  projectName: string;
+  projectPath: string;
+  targetType?: "project" | "worktree" | "branch" | "service" | "port";
+  target?: string;
+  actionLabel?: string;
+};
+
+export type HealthSummary = {
+  counts: {
+    critical: number;
+    warning: number;
+    info: number;
+    dirtyProjects: number;
+    dirtyWorktrees: number;
+    cleanupCandidates: number;
+    stoppedServices: number;
+    occupiedPorts: number;
+    missingProjects: number;
+  };
+  issues: HealthIssue[];
+};
+
 export type DashboardResponse = {
   projects: ProjectSnapshot[];
   summary: DashboardSummary;
+  health: HealthSummary;
 };
 
-export type ActivityTargetType = "project" | "worktree" | "branch" | "service";
+export type ActivityTargetType = "project" | "worktree" | "branch" | "service" | "service-group";
 
 export type ActivityEvent = {
   id: string;
