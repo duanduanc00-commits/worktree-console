@@ -1,4 +1,11 @@
-import type { HealthIssueKind, HealthIssueSeverity } from "../shared/types";
+import type { HealthIssue, HealthIssueKind, HealthIssueSeverity } from "../shared/types";
+
+export type HealthIssueProjectGroup = {
+  projectId: string;
+  projectName: string;
+  projectPath: string;
+  issues: HealthIssue[];
+};
 
 export function healthIssueTone(severity: HealthIssueSeverity): "neutral" | "clean" | "dirty" | "error" {
   if (severity === "critical") return "error";
@@ -17,4 +24,25 @@ export function healthIssueLabel(kind: HealthIssueKind): string {
   };
 
   return labels[kind];
+}
+
+export function groupHealthIssuesByProject(issues: HealthIssue[]): HealthIssueProjectGroup[] {
+  const groups = new Map<string, HealthIssueProjectGroup>();
+
+  for (const issue of issues) {
+    const group = groups.get(issue.projectId);
+    if (group) {
+      group.issues.push(issue);
+      continue;
+    }
+
+    groups.set(issue.projectId, {
+      projectId: issue.projectId,
+      projectName: issue.projectName,
+      projectPath: issue.projectPath,
+      issues: [issue]
+    });
+  }
+
+  return Array.from(groups.values());
 }

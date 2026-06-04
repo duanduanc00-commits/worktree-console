@@ -638,6 +638,34 @@ h1 {
   background: var(--surface-strong);
 }
 
+.health-project-groups {
+  display: grid;
+  gap: 16px;
+}
+
+.health-project-group {
+  display: grid;
+  gap: 8px;
+}
+
+.health-project-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  min-width: 0;
+  gap: 12px;
+}
+
+.health-project-heading h3 {
+  margin: 0;
+  font-size: 15px;
+  letter-spacing: 0;
+}
+
+.health-project-heading p {
+  margin: 3px 0 0;
+}
+
 .health-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;

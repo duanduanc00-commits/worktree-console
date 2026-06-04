@@ -61,7 +61,7 @@ import {
   serviceGroupStatusTone
 } from "./lib/service-groups-ui";
 import { branchWorktreeAssociation } from "./lib/branch-ui";
-import { healthIssueLabel, healthIssueTone } from "./lib/health-ui";
+import { groupHealthIssuesByProject, healthIssueLabel, healthIssueTone } from "./lib/health-ui";
 import { diffLineTone } from "./lib/diff-ui";
 import type {
   ActivityEvent,
@@ -655,6 +655,7 @@ function HealthPanel({
   onInspectIssue: (issue: HealthIssue) => void;
 }) {
   const { counts, issues } = dashboard.health;
+  const issueGroups = groupHealthIssuesByProject(issues);
 
   return (
     <section className="health-panel" aria-label="Project health">
@@ -670,30 +671,62 @@ function HealthPanel({
       ) : issues.length === 0 ? (
         <div className="empty-state compact">All registered projects look healthy.</div>
       ) : (
-        <div className="health-list">
-          {issues.map((issue) => (
-            <article className="health-row" key={issue.id}>
-              <div className="health-main">
-                <div className="health-title">
-                  <strong>{issue.title}</strong>
-                  <Badge tone={healthIssueTone(issue.severity)}>{healthIssueLabel(issue.kind)}</Badge>
+        <div className="health-project-groups">
+          {issueGroups.map((group) => (
+            <section className="health-project-group" key={group.projectId}>
+              <div className="health-project-heading">
+                <div>
+                  <h3>{group.projectName}</h3>
+                  <p className="mono">{group.projectPath}</p>
                 </div>
-                <div className="health-meta">
-                  <span>{issue.projectName}</span>
-                  <span aria-hidden="true">/</span>
-                  <span>{healthTargetLabel(issue, dashboard.projects)}</span>
-                </div>
-                <div className="health-detail">{issue.detail}</div>
+                <Badge tone={group.issues.some((issue) => issue.severity === "critical") ? "error" : "dirty"}>
+                  {group.issues.length} issue{group.issues.length === 1 ? "" : "s"}
+                </Badge>
               </div>
-              <div className="health-actions">
-                <Badge tone={healthIssueTone(issue.severity)}>{severityLabel(issue.severity)}</Badge>
-                <Button onClick={() => onInspectIssue(issue)}>{issue.actionLabel ?? "Inspect"}</Button>
+              <div className="health-list">
+                {group.issues.map((issue) => (
+                  <HealthIssueRow
+                    dashboard={dashboard}
+                    issue={issue}
+                    key={issue.id}
+                    onInspectIssue={onInspectIssue}
+                  />
+                ))}
               </div>
-            </article>
+            </section>
           ))}
         </div>
       )}
     </section>
+  );
+}
+
+function HealthIssueRow({
+  dashboard,
+  issue,
+  onInspectIssue
+}: {
+  dashboard: DashboardResponse;
+  issue: HealthIssue;
+  onInspectIssue: (issue: HealthIssue) => void;
+}) {
+  return (
+    <article className="health-row">
+      <div className="health-main">
+        <div className="health-title">
+          <strong>{issue.title}</strong>
+          <Badge tone={healthIssueTone(issue.severity)}>{healthIssueLabel(issue.kind)}</Badge>
+        </div>
+        <div className="health-meta">
+          <span>{healthTargetLabel(issue, dashboard.projects)}</span>
+        </div>
+        <div className="health-detail">{issue.detail}</div>
+      </div>
+      <div className="health-actions">
+        <Badge tone={healthIssueTone(issue.severity)}>{severityLabel(issue.severity)}</Badge>
+        <Button onClick={() => onInspectIssue(issue)}>{issue.actionLabel ?? "Inspect"}</Button>
+      </div>
+    </article>
   );
 }
 
