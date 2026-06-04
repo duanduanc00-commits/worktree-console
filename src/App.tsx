@@ -76,6 +76,7 @@ import {
   worktreeChangesLayoutClass,
   worktreePanelLayoutClass
 } from "./lib/diff-ui";
+import { AUTO_REFRESH_INTERVAL_MS, shouldAutoRefresh } from "./lib/refresh-ui";
 import type {
   ActivityEvent,
   BranchInfo,
@@ -142,8 +143,9 @@ export function App() {
   const [confirmAction, setConfirmAction] = useState<ConfirmAction | null>(null);
   const restoreInspectorWidth = useRef<number | null>(null);
   const inspectorManuallyResized = useRef(false);
+  const autoRefreshInFlight = useRef(false);
 
-  async function refresh() {
+  const refresh = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
@@ -155,9 +157,9 @@ export function App() {
     } finally {
       setLoading(false);
     }
-  }
+  }, []);
 
-  async function refreshActivity() {
+  const refreshActivity = useCallback(async () => {
     setActivityLoading(true);
     setActivityError(null);
     try {
@@ -167,7 +169,7 @@ export function App() {
     } finally {
       setActivityLoading(false);
     }
-  }
+  }, []);
 
   async function refreshAfterOperation() {
     await refresh();
@@ -185,13 +187,33 @@ export function App() {
 
   useEffect(() => {
     void refresh();
-  }, []);
+  }, [refresh]);
 
   useEffect(() => {
     if (view === "activity") {
       void refreshActivity();
     }
-  }, [view]);
+  }, [refreshActivity, view]);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      if (!shouldAutoRefresh(document.visibilityState) || autoRefreshInFlight.current) return;
+
+      autoRefreshInFlight.current = true;
+      void (async () => {
+        try {
+          await refresh();
+          if (view === "activity") {
+            await refreshActivity();
+          }
+        } finally {
+          autoRefreshInFlight.current = false;
+        }
+      })();
+    }, AUTO_REFRESH_INTERVAL_MS);
+
+    return () => window.clearInterval(timer);
+  }, [refresh, refreshActivity, view]);
 
   const filteredProjects = useMemo(() => {
     const needle = query.trim().toLowerCase();
