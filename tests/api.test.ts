@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { realpathSync } from "node:fs";
 import { join } from "node:path";
@@ -34,6 +34,31 @@ describe("createApp", () => {
     const response = await request(app).get("/api/health").expect(200);
 
     expect(response.body).toEqual({ ok: true });
+  });
+
+  it("serves built frontend assets from the same Express app when a static directory is configured", async () => {
+    const staticDir = join(tempDir, "dist");
+    await mkdir(staticDir, { recursive: true });
+    await writeFile(join(staticDir, "index.html"), '<!doctype html><div id="root">console</div>', "utf8");
+    await writeFile(join(staticDir, "asset.txt"), "asset", "utf8");
+
+    const app = createApp({
+      activityLog: new ActivityLog(join(tempDir, "activity.json")),
+      registry: new ProjectRegistry(join(tempDir, "projects.json")),
+      staticDir
+    });
+
+    const indexResponse = await request(app).get("/").expect(200);
+    expect(indexResponse.text).toContain("console");
+
+    const spaResponse = await request(app).get("/projects/demo").expect(200);
+    expect(spaResponse.text).toContain("console");
+
+    const assetResponse = await request(app).get("/asset.txt").expect(200);
+    expect(assetResponse.text).toBe("asset");
+
+    const healthResponse = await request(app).get("/api/health").expect(200);
+    expect(healthResponse.body).toEqual({ ok: true });
   });
 
   it("registers projects and returns dashboard snapshots", async () => {

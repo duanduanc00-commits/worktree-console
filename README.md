@@ -28,7 +28,28 @@ Prerequisites:
 
 - Node.js 22 or newer. npm is included with Node.js.
 - Git installed and available from your shell.
-- For the default URLs, local ports `5273` and `4217` should be available.
+- For packaged one-command use, local port `5273` should be available.
+
+After the npm package is published, run the local console with npx:
+
+```powershell
+npx worktree-console
+```
+
+The packaged command starts one local server and opens:
+
+- Console: `http://127.0.0.1:5273`
+- API: `http://127.0.0.1:5273/api`
+
+Useful options:
+
+```powershell
+npx worktree-console --port 6600
+npx worktree-console --data-dir "C:\Users\you\AppData\Local\Worktree Console"
+npx worktree-console --no-open
+```
+
+From a cloned repository, use source development mode:
 
 ```powershell
 npm install
@@ -43,6 +64,14 @@ When the default ports are available:
 The Vite dev server proxies `/api` to the local API server.
 
 If port `5273` is already in use, Vite may print a different frontend URL in the terminal. If port `4217` is already in use, set `PORT` for the API and update the `/api` proxy target in `vite.config.ts` to the same port.
+
+To smoke test the packaged runtime from a clone before npm publication:
+
+```powershell
+npm install
+npm run build
+npm start -- --no-open
+```
 
 ## Development Commands
 
@@ -107,7 +136,13 @@ Restart is intentionally limited to console-managed processes so an externally s
 
 ## Runtime Data
 
-Local runtime data is written under `data/` by default:
+Packaged `npx worktree-console` stores local runtime data in the user data directory by default:
+
+- Windows: `%LOCALAPPDATA%\Worktree Console`
+- macOS: `~/Library/Application Support/Worktree Console`
+- Linux: `$XDG_DATA_HOME/worktree-console` or `~/.local/share/worktree-console`
+
+Source development runs still write under `data/` by default:
 
 - `data/projects.json` stores registered projects, services, and service groups.
 - `data/activity-log.json` stores console operation history.
@@ -130,14 +165,22 @@ npm run dev:api
 
 If you change the API port, update the Vite proxy in `vite.config.ts` or run the frontend behind an equivalent proxy.
 
+For packaged one-command runs, use `--port` instead:
+
+```powershell
+npx worktree-console --port 6600
+```
+
 ## Project Layout
 
 - `src/App.tsx` contains the main React shell and local console views.
 - `src/components/ui/` contains the local shadcn-style primitives.
 - `src/lib/` contains client API wrappers and UI helper functions.
-- `src/server/` contains the Express API, Git readers, registry, service manager, activity log, and health summary builder.
+- `src/server/` contains the Express API, Git readers, registry, service manager, runtime config, activity log, and health summary builder.
 - `src/shared/types.ts` contains shared API and registry types.
 - `tests/` contains Vitest and supertest coverage for server behavior and UI helpers.
-- `docs/release.md` describes the current source-run release model.
+- `docs/release.md` describes the source and npm package release model.
+- `bin/worktree-console.js` starts the single-server packaged runtime.
+- `src/cli.ts` contains the package CLI entrypoint.
 - `docs/architecture.md` describes the local-first architecture and safety boundaries.
 - `docs/superpowers/plans/` contains implementation plans used during agent-driven development.

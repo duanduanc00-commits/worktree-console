@@ -5,11 +5,17 @@ Worktree Console is a local-first React and Express app. The browser UI talks to
 ## Runtime Shape
 
 ```text
-Browser UI
-  |
-  | /api through Vite proxy
-  v
-Express API
+Source development
+  Browser UI on Vite 5273
+    |
+    | /api through Vite proxy
+    v
+  Express API on 4217
+
+Packaged runtime
+  Browser UI and /api from one Express server on 5273
+
+Shared backend
   |
   +-- Git readers for registered repositories
   +-- Registry JSON for projects, services, and service groups
@@ -26,6 +32,7 @@ The app does not scan the full machine. It builds dashboard state from registere
 - `src/lib/*-ui.ts` contains small, tested UI helper functions.
 - `src/lib/refresh-ui.ts` contains the automatic refresh policy.
 - `src/server/app.ts` owns API routes and orchestration.
+- `src/server/runtime.ts` owns packaged runtime configuration, CLI flags, user data paths, static frontend serving, and browser opening.
 - `src/server/git.ts` owns Git command execution and parsing.
 - `src/server/registry.ts` owns project, service, and service-group persistence.
 - `src/server/services.ts` owns process spawning, stop/restart behavior, health checks, port detection, and process-tree ownership checks.
@@ -45,7 +52,13 @@ The browser also refreshes the open console automatically every 30 seconds while
 
 ## Local Data
 
-By default, local runtime data is stored under `data/`:
+Packaged `npx worktree-console` stores local runtime data outside the repository by default:
+
+- Windows: `%LOCALAPPDATA%\Worktree Console`
+- macOS: `~/Library/Application Support/Worktree Console`
+- Linux: `$XDG_DATA_HOME/worktree-console` or `~/.local/share/worktree-console`
+
+Source development runs store local runtime data under `data/` by default:
 
 - `data/projects.json`
 - `data/activity-log.json`

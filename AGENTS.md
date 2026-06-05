@@ -10,23 +10,49 @@ The product intentionally records only user-registered local projects. Do not ad
 
 ## Runtime
 
-Default development commands:
+Packaged one-command runtime:
+
+```powershell
+npx worktree-console
+```
+
+Packaged runtime defaults:
+
+- Console and API: `http://127.0.0.1:5273`
+- API namespace: `http://127.0.0.1:5273/api`
+- User data directory: platform user-data location unless overridden by `--data-dir` or environment variables
+
+The npm package is ready to publish but may not yet exist on npm. From a clone, smoke test the packaged runtime with:
+
+```powershell
+npm install
+npm run build
+npm start -- --no-open
+```
+
+Default source development commands:
 
 ```powershell
 npm install
 npm run dev
 ```
 
-Default ports:
+Default source development ports:
 
 - Frontend: `http://127.0.0.1:5273`
 - API: `http://127.0.0.1:4217`
 
-The default URLs assume ports `5273` and `4217` are available. The API port is controlled by `PORT`. If the API port changes, update the Vite `/api` proxy target in `vite.config.ts` to the same port.
+The source development URLs assume ports `5273` and `4217` are available. The API port is controlled by `PORT`. If the API port changes, update the Vite `/api` proxy target in `vite.config.ts` to the same port. Packaged runtime uses one port and supports `--port`.
 
 ## Local Data
 
-Runtime data is local-only and ignored by Git:
+Packaged runtime data is local-only and stored outside the repository by default:
+
+- Windows: `%LOCALAPPDATA%\Worktree Console`
+- macOS: `~/Library/Application Support/Worktree Console`
+- Linux: `$XDG_DATA_HOME/worktree-console` or `~/.local/share/worktree-console`
+
+Source development data is local-only and ignored by Git:
 
 - `data/projects.json`
 - `data/activity-log.json`
@@ -58,6 +84,7 @@ When changing local data behavior, destructive actions, service controls, Git cl
 ## Architecture Notes
 
 - `src/server/app.ts` owns API routing and orchestration.
+- `src/server/runtime.ts` owns packaged runtime config, user data paths, CLI flags, static frontend serving, and browser opening.
 - `src/server/git.ts` owns Git command helpers and parsers.
 - `src/server/registry.ts` owns persistent project, service, and service-group registration.
 - `src/server/services.ts` owns local process, process-tree ownership, and port detection.
@@ -94,6 +121,13 @@ Before claiming a code or documentation change is ready, run:
 npm test
 npm run build
 git diff --check
+```
+
+For release or package-runtime changes, also run:
+
+```powershell
+node bin/worktree-console.js --help
+npm pack --dry-run
 ```
 
 For UI changes, also verify the running app in a browser at `http://127.0.0.1:5273/`.

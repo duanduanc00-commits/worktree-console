@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { realpathSync } from "node:fs";
+import { access } from "node:fs/promises";
 import { basename, join } from "node:path";
 
 import express from "express";
@@ -48,6 +49,7 @@ export type AppDependencies = {
   activityLog?: ActivityRecorder;
   serviceManager?: ServiceController;
   selectFolder?: () => Promise<string | null>;
+  staticDir?: string;
 };
 
 type ActivityRecorder = {
@@ -76,7 +78,8 @@ export function createApp({
   activityLog = new ActivityLog(join(process.cwd(), "data", "activity-log.json")),
   registry,
   serviceManager = new ServiceManager(),
-  selectFolder = selectLocalFolder
+  selectFolder = selectLocalFolder,
+  staticDir
 }: AppDependencies) {
   const app = express();
   app.use(express.json());
@@ -554,6 +557,19 @@ export function createApp({
       next(error);
     }
   });
+
+  if (staticDir) {
+    app.use(express.static(staticDir));
+    app.get(/^(?!\/api(?:\/|$)).*/, async (_request, response, next) => {
+      const indexPath = join(staticDir, "index.html");
+      try {
+        await access(indexPath);
+        response.sendFile(indexPath);
+      } catch (error) {
+        next(error);
+      }
+    });
+  }
 
   app.use((error: Error, _request: express.Request, response: express.Response, _next: express.NextFunction) => {
     const status = error instanceof HttpError ? error.status : 500;

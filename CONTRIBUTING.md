@@ -22,6 +22,15 @@ Default local URLs when the default ports are available:
 
 If port `5273` is already in use, Vite may print a different frontend URL in the terminal. If port `4217` is already in use, set `PORT` for the API and update the `/api` proxy target in `vite.config.ts` to the same port.
 
+To smoke test the single-server package runtime from a clone:
+
+```powershell
+npm run build
+npm start -- --no-open
+```
+
+That runtime uses one local port, `5273` by default, and stores local data in the platform user-data directory unless you pass `--data-dir`.
+
 ## Before Opening A Pull Request
 
 Run:

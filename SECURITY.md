@@ -28,12 +28,20 @@ Do not include:
 
 ## Local Data And Privacy
 
-Runtime data is local-only and ignored by Git:
+Runtime data is local-only and may contain sensitive machine details.
+
+The packaged `npx worktree-console` runtime stores no data in the repository by default. It stores local data here:
+
+- Windows: `%LOCALAPPDATA%\Worktree Console`
+- macOS: `~/Library/Application Support/Worktree Console`
+- Linux: `$XDG_DATA_HOME/worktree-console` or `~/.local/share/worktree-console`
+
+Source development runs store local data under ignored repository files by default:
 
 - `data/projects.json`
 - `data/activity-log.json`
 
-These files may contain project paths, service commands, ports, and operation history. They should not be shared publicly without review and redaction.
+These files and directories may contain project paths, service commands, ports, and operation history. They should not be shared publicly without review and redaction.
 
 ## Security Boundaries
 
