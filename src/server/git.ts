@@ -4,7 +4,13 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { execFile } from "node:child_process";
 
-import type { BranchStatus, RecentCommit, WorktreeChange, WorktreeInfo } from "../shared/types";
+import type {
+  BranchStatus,
+  GitOperationChangeGroups,
+  RecentCommit,
+  WorktreeChange,
+  WorktreeInfo
+} from "../shared/types";
 
 const execFileAsync = promisify(execFile);
 const prettyCommitFormat = "--pretty=format:%h%x1f%s%x1f%an%x1f%cr";
@@ -180,6 +186,13 @@ export async function readBranchStatus(path: string): Promise<BranchStatus> {
 export async function readWorktreeChanges(path: string): Promise<WorktreeChange[]> {
   const { stdout } = await git(path, ["status", "--short", "--untracked-files=all", "-z"]);
   return parseShortStatusChanges(stdout);
+}
+
+export function splitGitOperationChanges(changes: WorktreeChange[]): GitOperationChangeGroups {
+  return {
+    staged: changes.filter(hasStagedChange),
+    unstaged: changes.filter((change) => hasUnstagedChange(change) || isUntrackedChange(change))
+  };
 }
 
 export function buildWorktreeDiffArgs(filePath: string): string[] {
