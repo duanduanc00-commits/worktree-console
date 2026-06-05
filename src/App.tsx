@@ -1573,6 +1573,8 @@ function CommitPanel({ project }: { project: ProjectSnapshot }) {
 }
 
 type GitPanelAction = GitSyncAction | "stash" | "stage" | "unstage" | "commit";
+type GitPanelScope = { generation: number; projectId: string; projectPath: string };
+type GitMutationRequest = GitPanelScope & { requestId: number; worktreePath: string };
 
 function GitPanel({
   onGitChanged,
@@ -1581,6 +1583,11 @@ function GitPanel({
   project: ProjectSnapshot;
   onGitChanged: (message: string) => Promise<void>;
 }) {
+  const requestScope = useRef({ generation: 0, projectId: project.id, projectPath: project.path });
+  const statusRequestId = useRef(0);
+  const diffRequestId = useRef(0);
+  const mutationRequestId = useRef(0);
+  const statusRef = useRef<GitOperationStatus | null>(null);
   const [status, setStatus] = useState<GitOperationStatus | null>(null);
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
   const [diff, setDiff] = useState<WorktreeDiffResponse | null>(null);
@@ -1590,36 +1597,45 @@ function GitPanel({
   const [busyAction, setBusyAction] = useState<GitPanelAction | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [diffError, setDiffError] = useState<string | null>(null);
-  const diffRequestId = useRef(0);
 
   useEffect(() => {
-    let cancelled = false;
     const targetPath = project.path;
-    diffRequestId.current += 1;
+    const nextScope = {
+      generation: requestScope.current.generation + 1,
+      projectId: project.id,
+      projectPath: targetPath
+    };
+    const requestId = statusRequestId.current + 1;
+    requestScope.current = nextScope;
+    statusRequestId.current = requestId;
+    mutationRequestId.current += 1;
+    statusRef.current = null;
     setStatus(null);
-    setSelectedFile(null);
-    setDiff(null);
-    setMessage("");
+    resetDiffState();
     setLoading(true);
-    setDiffLoading(false);
     setBusyAction(null);
+    setMessage("");
     setError(null);
-    setDiffError(null);
 
     void getGitStatus(project.id, targetPath)
       .then((nextStatus) => {
-        if (!cancelled) setStatus(nextStatus);
+        if (!isCurrentStatusRequest(nextScope, requestId, nextStatus)) return;
+        setCurrentStatus(nextStatus);
       })
       .catch((caught) => {
-        if (!cancelled) setError((caught as Error).message);
+        if (!isCurrentStatusRequest(nextScope, requestId)) return;
+        setError((caught as Error).message);
       })
       .finally(() => {
-        if (!cancelled) setLoading(false);
+        if (isCurrentStatusRequest(nextScope, requestId)) {
+          setLoading(false);
+        }
       });
 
     return () => {
-      cancelled = true;
+      statusRequestId.current += 1;
       diffRequestId.current += 1;
+      mutationRequestId.current += 1;
     };
   }, [project.id, project.path]);
 
@@ -1636,17 +1652,17 @@ function GitPanel({
     setDiffError(null);
   }
 
-  function applyStatus(nextStatus: GitOperationStatus) {
+  function setCurrentStatus(nextStatus: GitOperationStatus) {
+    statusRef.current = nextStatus;
     setStatus(nextStatus);
-    if (selectedFile && !gitStatusHasFile(nextStatus, selectedFile)) {
-      resetDiffState();
-    }
   }
 
   async function loadDiff(filePath: string) {
     if (!status) return;
 
     const requestId = diffRequestId.current + 1;
+    const scope = requestScope.current;
+    const worktreePath = status.worktreePath;
     diffRequestId.current = requestId;
     setSelectedFile(filePath);
     setDiff(null);
@@ -1654,14 +1670,14 @@ function GitPanel({
     setDiffError(null);
 
     try {
-      const nextDiff = await getWorktreeDiff(project.id, status.worktreePath, filePath);
-      if (diffRequestId.current !== requestId) return;
+      const nextDiff = await getWorktreeDiff(project.id, worktreePath, filePath);
+      if (!isCurrentDiffRequest(scope, requestId, worktreePath, nextDiff)) return;
       setDiff(nextDiff);
     } catch (caught) {
-      if (diffRequestId.current !== requestId) return;
+      if (!isCurrentDiffRequest(scope, requestId, worktreePath)) return;
       setDiffError((caught as Error).message);
     } finally {
-      if (diffRequestId.current === requestId) {
+      if (isCurrentDiffRequest(scope, requestId, worktreePath)) {
         setDiffLoading(false);
       }
     }
@@ -1670,48 +1686,60 @@ function GitPanel({
   async function runSyncAction(actionName: GitSyncAction) {
     if (!status || busyAction) return;
 
+    const request = startMutationRequest(status.worktreePath);
     setBusyAction(actionName);
     setError(null);
     try {
       const result = await runGitOperation(project.id, actionName, { path: status.worktreePath });
-      applyStatus(result.status);
+      if (!applyMutationStatus(request, result.status)) return;
       await onGitChanged(`${syncActionPastTense(actionName)} ${project.name}.`);
     } catch (caught) {
+      if (!isCurrentMutationRequest(request)) return;
       setError((caught as Error).message);
     } finally {
-      setBusyAction(null);
+      if (isCurrentMutationRequest(request)) {
+        setBusyAction(null);
+      }
     }
   }
 
   async function stashChanges() {
     if (!status || busyAction) return;
 
+    const request = startMutationRequest(status.worktreePath);
     setBusyAction("stash");
     setError(null);
     try {
       const result = await runGitOperation(project.id, "stash", { path: status.worktreePath });
-      applyStatus(result.status);
+      if (!applyMutationStatus(request, result.status)) return;
       await onGitChanged(`Stashed changes for ${project.name}.`);
     } catch (caught) {
+      if (!isCurrentMutationRequest(request)) return;
       setError((caught as Error).message);
     } finally {
-      setBusyAction(null);
+      if (isCurrentMutationRequest(request)) {
+        setBusyAction(null);
+      }
     }
   }
 
   async function runFileAction(actionName: "stage" | "unstage", filePath: string) {
     if (!status || busyAction) return;
 
+    const request = startMutationRequest(status.worktreePath);
     setBusyAction(actionName);
     setError(null);
     try {
       const result = await runGitOperation(project.id, actionName, { path: status.worktreePath, files: [filePath] });
-      applyStatus(result.status);
+      if (!applyMutationStatus(request, result.status)) return;
       await onGitChanged(actionName === "stage" ? `Staged ${filePath}.` : `Unstaged ${filePath}.`);
     } catch (caught) {
+      if (!isCurrentMutationRequest(request)) return;
       setError((caught as Error).message);
     } finally {
-      setBusyAction(null);
+      if (isCurrentMutationRequest(request)) {
+        setBusyAction(null);
+      }
     }
   }
 
@@ -1726,17 +1754,80 @@ function GitPanel({
     }
 
     setBusyAction("commit");
+    const request = startMutationRequest(status.worktreePath);
     setError(null);
     try {
       const result = await runGitOperation(project.id, "commit", { path: status.worktreePath, message });
+      if (!applyMutationStatus(request, result.status)) return;
       setMessage("");
-      setStatus(result.status);
       await onGitChanged(`Committed ${project.name}.`);
     } catch (caught) {
+      if (!isCurrentMutationRequest(request)) return;
       setError((caught as Error).message);
     } finally {
-      setBusyAction(null);
+      if (isCurrentMutationRequest(request)) {
+        setBusyAction(null);
+      }
     }
+  }
+
+  function startMutationRequest(worktreePath: string) {
+    const requestId = mutationRequestId.current + 1;
+    mutationRequestId.current = requestId;
+    return { ...requestScope.current, requestId, worktreePath };
+  }
+
+  function applyMutationStatus(request: GitMutationRequest, nextStatus: GitOperationStatus) {
+    if (!isCurrentMutationRequest(request, nextStatus)) return false;
+    resetDiffState();
+    setCurrentStatus(nextStatus);
+    return true;
+  }
+
+  function isCurrentStatusRequest(
+    scope: GitPanelScope,
+    requestId: number,
+    nextStatus?: GitOperationStatus
+  ) {
+    return (
+      statusRequestId.current === requestId &&
+      isCurrentScope(scope) &&
+      (!nextStatus ||
+        (nextStatus.projectId === scope.projectId && sameGitPath(nextStatus.worktreePath, scope.projectPath)))
+    );
+  }
+
+  function isCurrentDiffRequest(
+    scope: GitPanelScope,
+    requestId: number,
+    worktreePath: string,
+    nextDiff?: WorktreeDiffResponse
+  ) {
+    return (
+      diffRequestId.current === requestId &&
+      isCurrentScope(scope) &&
+      Boolean(statusRef.current && sameGitPath(statusRef.current.worktreePath, worktreePath)) &&
+      (!nextDiff || sameGitPath(nextDiff.worktreePath, worktreePath))
+    );
+  }
+
+  function isCurrentMutationRequest(request: GitMutationRequest, nextStatus?: GitOperationStatus) {
+    return (
+      mutationRequestId.current === request.requestId &&
+      isCurrentScope(request) &&
+      Boolean(statusRef.current && sameGitPath(statusRef.current.worktreePath, request.worktreePath)) &&
+      (!nextStatus ||
+        (nextStatus.projectId === request.projectId && sameGitPath(nextStatus.worktreePath, request.worktreePath)))
+    );
+  }
+
+  function isCurrentScope(scope: GitPanelScope) {
+    const currentScope = requestScope.current;
+    return (
+      currentScope.generation === scope.generation &&
+      currentScope.projectId === scope.projectId &&
+      sameGitPath(currentScope.projectPath, scope.projectPath)
+    );
   }
 
   function renderChangeRows(changes: WorktreeChange[], actionName: "stage" | "unstage") {
@@ -3112,6 +3203,22 @@ function commitRangeLabel(range: CommitRange) {
 
 function gitStatusHasFile(status: GitOperationStatus, filePath: string) {
   return [...status.changes.unstaged, ...status.changes.staged].some((change) => change.path === filePath);
+}
+
+function sameGitPath(left: string, right: string) {
+  const normalizedLeft = normalizeGitPath(left);
+  const normalizedRight = normalizeGitPath(right);
+  if (normalizedLeft === normalizedRight) return true;
+  if (!isWindowsGitPath(normalizedLeft) && !isWindowsGitPath(normalizedRight)) return false;
+  return normalizedLeft.toLowerCase() === normalizedRight.toLowerCase();
+}
+
+function normalizeGitPath(path: string) {
+  return path.replace(/\\/g, "/").replace(/\/+$/, "");
+}
+
+function isWindowsGitPath(path: string) {
+  return /^[a-z]:\//i.test(path) || path.startsWith("//");
 }
 
 function syncActionLabel(actionName: GitSyncAction) {
