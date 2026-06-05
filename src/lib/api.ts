@@ -34,6 +34,22 @@ export type AddServiceGroupPayload = {
 
 export type UpdateServiceGroupPayload = Partial<AddServiceGroupPayload>;
 
+export type GitOperationAction = "fetch" | "pull" | "push" | "stage" | "unstage" | "commit" | "stash";
+
+type GitTargetPayload = { path?: string };
+
+type GitFileSelectionPayload = GitTargetPayload & ({ files: string[]; all?: false } | { all: true; files?: never });
+
+export type GitOperationPayloads = {
+  fetch: GitTargetPayload;
+  pull: GitTargetPayload;
+  push: GitTargetPayload;
+  stage: GitFileSelectionPayload;
+  unstage: GitFileSelectionPayload;
+  commit: GitTargetPayload & { message: string };
+  stash: GitTargetPayload & { message?: string | null };
+};
+
 export async function getDashboard(): Promise<DashboardResponse> {
   return request<DashboardResponse>("/api/projects");
 }
@@ -95,10 +111,10 @@ export async function getGitStatus(projectId: string, worktreePath: string): Pro
   return request<GitOperationStatus>(`/api/projects/${projectId}/git/status?${params.toString()}`);
 }
 
-export async function runGitOperation(
+export async function runGitOperation<Action extends GitOperationAction>(
   projectId: string,
-  action: "fetch" | "pull" | "push" | "stage" | "unstage" | "commit" | "stash",
-  body: Record<string, unknown>
+  action: Action,
+  body: GitOperationPayloads[Action]
 ): Promise<GitOperationResponse> {
   return request<GitOperationResponse>(`/api/projects/${projectId}/git/${action}`, {
     method: "POST",
