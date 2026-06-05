@@ -73,7 +73,7 @@ Security and privacy boundaries:
 - The app does not upload registry or activity data.
 - Local runtime data can include private paths, commands, ports, and operation history.
 - Destructive Git actions must stay behind safety checks and confirmation.
-- Service controls do not stop external processes that were only detected by port.
+- Service controls may stop external processes only when the backend matches the listening process tree to the registered project path or service working directory.
 
 Pull requests are checked by GitHub Actions with `npm ci`, `npm test`, and `npm run build`.
 
@@ -97,7 +97,13 @@ Services with ports behave like long-running local apps. Services without ports 
 
 Service groups collect existing project services into a named stack. Starting a group starts services in the saved order. Stopping a group stops services in reverse order. Restarting a group follows the same stop-then-start ordering. Removing a group only removes the grouping metadata; the individual services remain registered.
 
-The console distinguishes processes it started from external processes already listening on a configured port. It will not stop external processes from the service controls.
+The console distinguishes three process origins:
+
+- `Console`: started by Worktree Console. Stop and restart are available.
+- `Project external`: started outside the console, but the listening process tree includes the registered project path or service working directory. Stop is available after confirmation, and the backend re-checks the match before terminating the PID.
+- `External`: a configured port or health check is active, but the listening process cannot be matched to the project. Stop remains disabled.
+
+Restart is intentionally limited to console-managed processes so an externally started environment is not replaced by a different registered command by accident.
 
 ## Runtime Data
 

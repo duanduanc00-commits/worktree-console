@@ -121,6 +121,8 @@ describe("createApp", () => {
           status: "stopped",
           startedByConsole: false,
           pid: null,
+          processOwnership: "none" as const,
+          processOwnerHint: null,
           portsStatus: service.ports.map((port) => ({
             port,
             listening: false,
@@ -760,6 +762,8 @@ function serviceSnapshot(service: RegisteredService, status: ServiceSnapshot["st
     status,
     startedByConsole: status === "running" || status === "starting",
     pid: status === "running" || status === "starting" ? 1234 : null,
+    processOwnership: status === "running" || status === "starting" ? "console" : "none",
+    processOwnerHint: status === "running" || status === "starting" ? "Started by this console." : null,
     portsStatus: service.ports.map((port) => ({
       port,
       listening: status === "running" || status === "starting",

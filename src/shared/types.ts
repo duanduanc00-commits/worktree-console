@@ -99,10 +99,14 @@ export type ServicePortStatus = {
   processName: string | null;
 };
 
+export type ServiceProcessOwnership = "none" | "console" | "project" | "unknown";
+
 export type ServiceSnapshot = RegisteredService & {
   status: "running" | "stopped" | "starting" | "error" | "port-occupied";
   startedByConsole: boolean;
   pid: number | null;
+  processOwnership: ServiceProcessOwnership;
+  processOwnerHint: string | null;
   portsStatus: ServicePortStatus[];
   logPreview: string[];
   error?: string;

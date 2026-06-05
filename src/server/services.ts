@@ -4,7 +4,7 @@ import { mkdir, readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { promisify } from "node:util";
 
-import type { RegisteredService, ServicePortStatus, ServiceSnapshot } from "../shared/types";
+import type { RegisteredService, ServicePortStatus, ServiceProcessOwnership, ServiceSnapshot } from "../shared/types";
 
 const execFileAsync = promisify(execFile);
 
@@ -16,25 +16,44 @@ type ActiveService = {
 export type ServiceManagerOptions = {
   logDir?: string;
   inspectPorts?: (ports: number[]) => Promise<ServicePortStatus[]>;
+  inspectProcessTree?: (pid: number) => Promise<ServiceProcessTreeEntry[]>;
   checkHealth?: (url: string) => Promise<boolean>;
+  terminatePid?: (pid: number) => Promise<void>;
   readLogPreview?: (projectId: string, serviceId: string) => Promise<string[]>;
+};
+
+type ServiceProcessTreeEntry = {
+  pid: number;
+  parentPid: number | null;
+  name: string | null;
+  executablePath: string | null;
+  commandLine: string | null;
+};
+
+type OwnershipMarker = {
+  label: "project path" | "service directory";
+  value: string;
 };
 
 export class ServiceManager {
   private readonly active = new Map<string, ActiveService>();
   private readonly logDir: string;
   private readonly inspectPortsImpl: (ports: number[]) => Promise<ServicePortStatus[]>;
+  private readonly inspectProcessTreeImpl: (pid: number) => Promise<ServiceProcessTreeEntry[]>;
   private readonly checkHealthImpl: (url: string) => Promise<boolean>;
+  private readonly terminatePidImpl: (pid: number) => Promise<void>;
   private readonly readLogPreviewImpl?: (projectId: string, serviceId: string) => Promise<string[]>;
 
   constructor(options: ServiceManagerOptions = {}) {
     this.logDir = options.logDir ?? join(process.cwd(), "work", "service-logs");
     this.inspectPortsImpl = options.inspectPorts ?? inspectPorts;
+    this.inspectProcessTreeImpl = options.inspectProcessTree ?? inspectProcessTree;
     this.checkHealthImpl = options.checkHealth ?? checkHealth;
+    this.terminatePidImpl = options.terminatePid ?? terminatePid;
     this.readLogPreviewImpl = options.readLogPreview;
   }
 
-  async snapshot(projectId: string, service: RegisteredService): Promise<ServiceSnapshot> {
+  async snapshot(projectId: string, service: RegisteredService, projectPath = service.cwd): Promise<ServiceSnapshot> {
     const key = serviceKey(projectId, service.id);
     const active = this.active.get(key);
     const isOwnedProcessRunning = !!active?.child.pid && active.child.exitCode === null && !active.child.killed;
@@ -46,12 +65,21 @@ export class ServiceManager {
       isOwnedProcessRunning,
       occupiedPort: !!occupiedPort
     });
+    const ownership = await this.resolveProcessOwnership({
+      isOwnedProcessRunning,
+      portsStatus,
+      projectPath,
+      service,
+      status
+    });
 
     return {
       ...service,
       status,
       startedByConsole: isOwnedProcessRunning,
       pid: isOwnedProcessRunning ? active?.child.pid ?? null : occupiedPort?.pid ?? null,
+      processOwnership: ownership.ownership,
+      processOwnerHint: ownership.hint,
       portsStatus,
       logPreview: await this.logs(projectId, service.id)
     };
@@ -90,22 +118,42 @@ export class ServiceManager {
     return this.snapshot(projectId, service);
   }
 
-  async stop(projectId: string, service: RegisteredService): Promise<ServiceSnapshot> {
+  async stop(projectId: string, service: RegisteredService, projectPath = service.cwd): Promise<ServiceSnapshot> {
     const key = serviceKey(projectId, service.id);
     const active = this.active.get(key);
-    if (!active?.child.pid || active.child.exitCode !== null || active.child.killed) {
-      throw new Error(`${service.name} was not started by this console.`);
+    const current = await this.snapshot(projectId, service, projectPath);
+
+    if (current.startedByConsole) {
+      if (!active?.child.pid || active.child.exitCode !== null || active.child.killed) {
+        throw new Error(`${service.name} was not started by this console.`);
+      }
+
+      await this.terminatePidImpl(active.child.pid);
+      this.active.delete(key);
+      return this.snapshot(projectId, service, projectPath);
     }
 
-    await terminateProcess(active.child);
-    this.active.delete(key);
-    return this.snapshot(projectId, service);
+    const pids = listeningPids(current.portsStatus);
+    if (pids.length === 0) {
+      throw new Error("External process PID could not be detected for this service.");
+    }
+    if (current.processOwnership !== "project") {
+      throw new Error("External process is not recognized as part of this project.");
+    }
+    if (pids.includes(process.pid)) {
+      throw new Error("Refusing to stop the Worktree Console server process.");
+    }
+
+    for (const pid of pids) {
+      await this.terminatePidImpl(pid);
+    }
+    return this.snapshot(projectId, service, projectPath);
   }
 
-  async restart(projectId: string, service: RegisteredService): Promise<ServiceSnapshot> {
+  async restart(projectId: string, service: RegisteredService, projectPath = service.cwd): Promise<ServiceSnapshot> {
     const key = serviceKey(projectId, service.id);
     if (this.active.has(key)) {
-      await this.stop(projectId, service);
+      await this.stop(projectId, service, projectPath);
     }
     return this.start(projectId, service);
   }
@@ -119,6 +167,52 @@ export class ServiceManager {
 
   private logPath(projectId: string, serviceId: string) {
     return join(this.logDir, `${safeName(projectId)}-${safeName(serviceId)}.log`);
+  }
+
+  private async resolveProcessOwnership({
+    isOwnedProcessRunning,
+    portsStatus,
+    projectPath,
+    service,
+    status
+  }: {
+    isOwnedProcessRunning: boolean;
+    portsStatus: ServicePortStatus[];
+    projectPath: string;
+    service: RegisteredService;
+    status: ServiceSnapshot["status"];
+  }): Promise<{ ownership: ServiceProcessOwnership; hint: string | null }> {
+    if (isOwnedProcessRunning) {
+      return { ownership: "console", hint: "Started by this console." };
+    }
+    if (status === "stopped") {
+      return { ownership: "none", hint: null };
+    }
+
+    const pids = listeningPids(portsStatus);
+    if (pids.length === 0) {
+      return { ownership: "unknown", hint: null };
+    }
+
+    const markers = ownershipMarkers(projectPath, service.cwd);
+    if (markers.length === 0) {
+      return { ownership: "unknown", hint: null };
+    }
+
+    let matchedMarker: OwnershipMarker | null = null;
+    for (const pid of pids) {
+      const processTree = await this.inspectProcessTreeImpl(pid).catch(() => []);
+      const marker = matchingOwnershipMarker(processTree, markers);
+      if (!marker) {
+        return { ownership: "unknown", hint: null };
+      }
+      matchedMarker ??= marker;
+    }
+
+    return {
+      ownership: "project",
+      hint: matchedMarker ? `Matched ${matchedMarker.label} in process tree.` : null
+    };
   }
 }
 
@@ -196,6 +290,66 @@ async function unixListeningPorts(): Promise<ServicePortStatus[]> {
     .filter((entry) => Number.isInteger(entry.port));
 }
 
+async function inspectProcessTree(pid: number): Promise<ServiceProcessTreeEntry[]> {
+  if (process.platform === "win32") {
+    return windowsProcessTree(pid);
+  }
+  return unixProcessTree(pid);
+}
+
+async function windowsProcessTree(pid: number): Promise<ServiceProcessTreeEntry[]> {
+  const script = `
+$items = @()
+$pidValue = ${Number(pid)}
+for ($i = 0; $i -lt 8 -and $pidValue -gt 0; $i++) {
+  $processInfo = Get-CimInstance Win32_Process -Filter "ProcessId=$pidValue" -ErrorAction SilentlyContinue
+  if (-not $processInfo) { break }
+  $items += [pscustomobject]@{
+    pid = [int]$processInfo.ProcessId
+    parentPid = [int]$processInfo.ParentProcessId
+    name = $processInfo.Name
+    executablePath = $processInfo.ExecutablePath
+    commandLine = $processInfo.CommandLine
+  }
+  $pidValue = [int]$processInfo.ParentProcessId
+}
+$items | ConvertTo-Json -Compress
+`;
+  const { stdout } = await execFileAsync(
+    "powershell.exe",
+    ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script],
+    { windowsHide: true, timeout: 3000 }
+  );
+  return parseProcessTreeJson(stdout);
+}
+
+async function unixProcessTree(pid: number): Promise<ServiceProcessTreeEntry[]> {
+  const tree: ServiceProcessTreeEntry[] = [];
+  let currentPid = pid;
+
+  for (let index = 0; index < 8 && currentPid > 0; index += 1) {
+    const { stdout } = await execFileAsync("ps", ["-o", "pid=,ppid=,comm=,args=", "-p", String(currentPid)], {
+      timeout: 3000
+    });
+    const line = stdout.trim();
+    const match = /^(\d+)\s+(\d+)\s+(\S+)\s*(.*)$/.exec(line);
+    if (!match) break;
+
+    const [, rawPid, rawParentPid, name, commandLine] = match;
+    const parentPid = Number(rawParentPid);
+    tree.push({
+      pid: Number(rawPid),
+      parentPid,
+      name,
+      executablePath: null,
+      commandLine: commandLine || null
+    });
+    currentPid = parentPid;
+  }
+
+  return tree;
+}
+
 async function checkHealth(url: string): Promise<boolean> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 900);
@@ -207,17 +361,17 @@ async function checkHealth(url: string): Promise<boolean> {
   }
 }
 
-async function terminateProcess(child: ChildProcess): Promise<void> {
-  if (!child.pid) {
+async function terminatePid(pid: number): Promise<void> {
+  if (!pid) {
     return;
   }
 
   if (process.platform === "win32") {
-    await execFileAsync("taskkill.exe", ["/PID", String(child.pid), "/T", "/F"], { windowsHide: true }).catch(() => undefined);
+    await execFileAsync("taskkill.exe", ["/PID", String(pid), "/T", "/F"], { windowsHide: true }).catch(() => undefined);
     return;
   }
 
-  child.kill("SIGTERM");
+  process.kill(pid, "SIGTERM");
 }
 
 async function readLogTail(path: string, maxLines: number): Promise<string[]> {
@@ -235,4 +389,80 @@ function safeName(value: string) {
 
 function serviceKey(projectId: string, serviceId: string) {
   return `${projectId}:${serviceId}`;
+}
+
+function listeningPids(portsStatus: ServicePortStatus[]): number[] {
+  return Array.from(
+    new Set(
+      portsStatus
+        .filter((port) => port.listening && Number.isInteger(port.pid) && (port.pid ?? 0) > 0)
+        .map((port) => port.pid as number)
+    )
+  );
+}
+
+function ownershipMarkers(projectPath: string, serviceCwd: string): OwnershipMarker[] {
+  const markers: OwnershipMarker[] = [];
+  addOwnershipMarker(markers, "project path", projectPath);
+  addOwnershipMarker(markers, "service directory", serviceCwd);
+  return markers;
+}
+
+function addOwnershipMarker(markers: OwnershipMarker[], label: OwnershipMarker["label"], rawPath: string) {
+  const marker = normalizePathForMatch(rawPath);
+  if (!marker || markers.some((candidate) => candidate.value === marker)) {
+    return;
+  }
+  markers.push({ label, value: marker });
+}
+
+function matchingOwnershipMarker(
+  processTree: ServiceProcessTreeEntry[],
+  markers: OwnershipMarker[]
+): OwnershipMarker | null {
+  const haystack = normalizeTextForPathMatch(
+    processTree
+      .flatMap((entry) => [entry.executablePath, entry.commandLine])
+      .filter((value): value is string => Boolean(value))
+      .join("\n")
+  );
+
+  return markers.find((marker) => haystack.includes(marker.value)) ?? null;
+}
+
+function normalizePathForMatch(rawPath: string): string | null {
+  const trimmed = rawPath.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  const normalized = normalizeTextForPathMatch(trimmed).replace(/\/+$/, "");
+  if (normalized.length < 4 || !normalized.includes("/")) {
+    return null;
+  }
+  return normalized;
+}
+
+function normalizeTextForPathMatch(value: string): string {
+  return value.replace(/\\/g, "/").replace(/"/g, "").toLowerCase();
+}
+
+function parseProcessTreeJson(raw: string): ServiceProcessTreeEntry[] {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return [];
+  }
+  const parsed: unknown = JSON.parse(trimmed);
+  const rows = Array.isArray(parsed) ? parsed : [parsed];
+
+  return rows
+    .filter((row): row is Record<string, unknown> => Boolean(row) && typeof row === "object")
+    .map((row) => ({
+      pid: Number(row.pid) || 0,
+      parentPid: Number(row.parentPid) || null,
+      name: typeof row.name === "string" ? row.name : null,
+      executablePath: typeof row.executablePath === "string" ? row.executablePath : null,
+      commandLine: typeof row.commandLine === "string" ? row.commandLine : null
+    }))
+    .filter((entry) => entry.pid > 0);
 }

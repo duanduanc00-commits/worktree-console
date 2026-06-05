@@ -56,10 +56,10 @@ type ActivityRecorder = {
 };
 
 type ServiceController = {
-  snapshot(projectId: string, service: RegisteredService): Promise<ServiceSnapshot>;
+  snapshot(projectId: string, service: RegisteredService, projectPath?: string): Promise<ServiceSnapshot>;
   start(projectId: string, service: RegisteredService): Promise<ServiceSnapshot>;
-  stop(projectId: string, service: RegisteredService): Promise<ServiceSnapshot>;
-  restart(projectId: string, service: RegisteredService): Promise<ServiceSnapshot>;
+  stop(projectId: string, service: RegisteredService, projectPath?: string): Promise<ServiceSnapshot>;
+  restart(projectId: string, service: RegisteredService, projectPath?: string): Promise<ServiceSnapshot>;
   logs(projectId: string, serviceId: string): Promise<string[]>;
 };
 
@@ -349,7 +349,7 @@ export function createApp({
         request.params.id,
         request.params.groupId
       );
-      const payload = await runServiceGroupAction(serviceManager, project.id, group, services, "start");
+      const payload = await runServiceGroupAction(serviceManager, project.id, project.path, group, services, "start");
       await recordServiceGroupActionActivity(activityLog, project, group, payload);
       response.status(202).json(payload);
     } catch (error) {
@@ -364,7 +364,7 @@ export function createApp({
         request.params.id,
         request.params.groupId
       );
-      const payload = await runServiceGroupAction(serviceManager, project.id, group, services, "stop");
+      const payload = await runServiceGroupAction(serviceManager, project.id, project.path, group, services, "stop");
       await recordServiceGroupActionActivity(activityLog, project, group, payload);
       response.status(202).json(payload);
     } catch (error) {
@@ -379,7 +379,7 @@ export function createApp({
         request.params.id,
         request.params.groupId
       );
-      const payload = await runServiceGroupAction(serviceManager, project.id, group, services, "restart");
+      const payload = await runServiceGroupAction(serviceManager, project.id, project.path, group, services, "restart");
       await recordServiceGroupActionActivity(activityLog, project, group, payload);
       response.status(202).json(payload);
     } catch (error) {
@@ -408,7 +408,7 @@ export function createApp({
   app.post("/api/projects/:id/services/:serviceId/stop", async (request, response, next) => {
     try {
       const { project, service } = await findProjectService(registry, request.params.id, request.params.serviceId);
-      const snapshot = await serviceManager.stop(project.id, service);
+      const snapshot = await serviceManager.stop(project.id, service, project.path);
       await recordActivity(activityLog, {
         action: "service.stop",
         label: "Stopped service",
@@ -426,7 +426,7 @@ export function createApp({
   app.post("/api/projects/:id/services/:serviceId/restart", async (request, response, next) => {
     try {
       const { project, service } = await findProjectService(registry, request.params.id, request.params.serviceId);
-      const snapshot = await serviceManager.restart(project.id, service);
+      const snapshot = await serviceManager.restart(project.id, service, project.path);
       await recordActivity(activityLog, {
         action: "service.restart",
         label: "Restarted service",
@@ -567,7 +567,9 @@ export async function snapshotProject(
   project: RegisteredProject,
   serviceManager: ServiceController = new ServiceManager()
 ): Promise<ProjectSnapshot> {
-  const services = await Promise.all(project.services.map((service) => serviceManager.snapshot(project.id, service)));
+  const services = await Promise.all(
+    project.services.map((service) => serviceManager.snapshot(project.id, service, project.path))
+  );
   const serviceGroups = buildServiceGroupSnapshots(project.serviceGroups, services);
   const exists = await pathExists(project.path);
   if (!exists) {
@@ -792,6 +794,7 @@ async function findProjectServiceGroupServices(
 async function runServiceGroupAction(
   serviceManager: ServiceController,
   projectId: string,
+  projectPath: string,
   group: RegisteredServiceGroup,
   services: RegisteredService[],
   action: ServiceGroupAction
@@ -799,12 +802,12 @@ async function runServiceGroupAction(
   const results: ServiceGroupActionResult[] = [];
 
   if (action === "start") {
-    await runServiceGroupOperation(serviceManager, projectId, services, "start", results);
+    await runServiceGroupOperation(serviceManager, projectId, projectPath, services, "start", results);
   } else if (action === "stop") {
-    await runServiceGroupOperation(serviceManager, projectId, [...services].reverse(), "stop", results);
+    await runServiceGroupOperation(serviceManager, projectId, projectPath, [...services].reverse(), "stop", results);
   } else {
-    await runServiceGroupOperation(serviceManager, projectId, [...services].reverse(), "stop", results);
-    await runServiceGroupOperation(serviceManager, projectId, services, "start", results);
+    await runServiceGroupOperation(serviceManager, projectId, projectPath, [...services].reverse(), "stop", results);
+    await runServiceGroupOperation(serviceManager, projectId, projectPath, services, "start", results);
   }
 
   return {
@@ -819,13 +822,14 @@ async function runServiceGroupAction(
 async function runServiceGroupOperation(
   serviceManager: ServiceController,
   projectId: string,
+  projectPath: string,
   services: RegisteredService[],
   operation: ServiceGroupActionOperation,
   results: ServiceGroupActionResult[]
 ): Promise<void> {
   for (const service of services) {
     try {
-      const snapshot = await serviceManager[operation](projectId, service);
+      const snapshot = await serviceManager[operation](projectId, service, projectPath);
       results.push({
         serviceId: service.id,
         serviceName: service.name,

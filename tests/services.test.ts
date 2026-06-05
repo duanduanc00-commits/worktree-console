@@ -42,4 +42,82 @@ describe("ServiceManager", () => {
       portsStatus: [{ port: 5274, listening: true, pid: 4312, processName: "node.exe" }]
     });
   });
+
+  it("marks external processes as project owned when their process tree includes the project path", async () => {
+    const manager = new ServiceManager({
+      inspectPorts: async () => [{ port: 5274, listening: true, pid: 4312, processName: "node.exe" }],
+      inspectProcessTree: async () => [
+        {
+          pid: 4312,
+          parentPid: 4000,
+          name: "node.exe",
+          executablePath: "E:/Program Files/node.exe",
+          commandLine: '"node" "E:/demo/apps/admin/node_modules/vite/bin/vite.js"'
+        }
+      ],
+      readLogPreview: async () => []
+    });
+
+    await expect(manager.snapshot("project-1", service, "E:/demo")).resolves.toMatchObject({
+      status: "port-occupied",
+      startedByConsole: false,
+      processOwnership: "project",
+      processOwnerHint: "Matched project path in process tree."
+    });
+  });
+
+  it("stops an externally started process only when it is matched to the project path", async () => {
+    let listening = true;
+    const terminatedPids: number[] = [];
+    const manager = new ServiceManager({
+      inspectPorts: async () => [
+        { port: 5274, listening, pid: listening ? 4312 : null, processName: listening ? "node.exe" : null }
+      ],
+      inspectProcessTree: async () => [
+        {
+          pid: 4312,
+          parentPid: 4000,
+          name: "node.exe",
+          executablePath: "E:/Program Files/node.exe",
+          commandLine: '"node" "E:/demo/apps/admin/server.js"'
+        }
+      ],
+      terminatePid: async (pid) => {
+        terminatedPids.push(pid);
+        listening = false;
+      },
+      readLogPreview: async () => []
+    });
+
+    await expect(manager.stop("project-1", service, "E:/demo")).resolves.toMatchObject({
+      status: "stopped",
+      processOwnership: "none"
+    });
+    expect(terminatedPids).toEqual([4312]);
+  });
+
+  it("refuses to stop an external process when its process tree cannot be matched to the project", async () => {
+    const terminatedPids: number[] = [];
+    const manager = new ServiceManager({
+      inspectPorts: async () => [{ port: 5274, listening: true, pid: 4312, processName: "node.exe" }],
+      inspectProcessTree: async () => [
+        {
+          pid: 4312,
+          parentPid: 4000,
+          name: "node.exe",
+          executablePath: "E:/Program Files/node.exe",
+          commandLine: '"node" "E:/other-project/server.js"'
+        }
+      ],
+      terminatePid: async (pid) => {
+        terminatedPids.push(pid);
+      },
+      readLogPreview: async () => []
+    });
+
+    await expect(manager.stop("project-1", service, "E:/demo")).rejects.toThrow(
+      "External process is not recognized as part of this project."
+    );
+    expect(terminatedPids).toEqual([]);
+  });
 });

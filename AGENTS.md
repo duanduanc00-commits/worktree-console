@@ -60,7 +60,7 @@ When changing local data behavior, destructive actions, service controls, Git cl
 - `src/server/app.ts` owns API routing and orchestration.
 - `src/server/git.ts` owns Git command helpers and parsers.
 - `src/server/registry.ts` owns persistent project, service, and service-group registration.
-- `src/server/services.ts` owns local process and port detection.
+- `src/server/services.ts` owns local process, process-tree ownership, and port detection.
 - `src/server/health.ts` derives health issues from project snapshots only; keep it pure.
 - `src/server/activity.ts` records local console operations.
 - `src/lib/*-ui.ts` files contain small UI helper functions with direct tests.
@@ -72,7 +72,7 @@ When changing local data behavior, destructive actions, service controls, Git cl
 - Keep the app local-first. Avoid adding remote telemetry, hosted storage, or background scanning unless explicitly requested.
 - Keep destructive Git cleanup conservative. Worktree and branch deletion must stay behind safety assessment and confirmation.
 - Detached worktrees should not be marked safe when their HEAD is not contained by any reported branch.
-- Do not stop external processes that were only detected by port. Service controls may stop processes started by this console.
+- Do not stop unknown external processes that were only detected by port. Service controls may stop console-started processes, and may stop external processes only when the backend matches the listening PID's process tree to the registered project path or service working directory.
 - Keep diff APIs bounded and only allow diffs for changed files reported by the corresponding worktree snapshot.
 - Health summary cards are interactive filters. Keep their labels and tooltip text short.
 - Activity log should record meaningful user actions, especially destructive actions and service operations.

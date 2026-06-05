@@ -1,6 +1,6 @@
 # Security Policy
 
-Worktree Console is a local-first tool that can read Git repositories, inspect local ports, run configured commands, and remove Git worktrees or branches after confirmation. Treat it as a trusted local developer tool.
+Worktree Console is a local-first tool that can read Git repositories, inspect local ports and process trees, run configured commands, stop matched local service processes, and remove Git worktrees or branches after confirmation. Treat it as a trusted local developer tool.
 
 ## Supported Versions
 
@@ -41,4 +41,4 @@ These files may contain project paths, service commands, ports, and operation hi
 - The app must not scan the whole machine automatically.
 - The app must not upload local registry or activity data.
 - Destructive Git actions must require safety assessment and confirmation.
-- The service controls must not stop external processes that were only detected by port.
+- The service controls must not stop unknown external processes that were only detected by port. Externally started processes may be stopped only after the backend matches the listening process tree to the registered project path or service working directory.

@@ -47,6 +47,9 @@ import {
   updateProjectName
 } from "./lib/api";
 import {
+  serviceCanRestart,
+  serviceCanStop,
+  serviceExternalStopConfirmation,
   serviceKindLabel,
   servicePortLabel,
   servicePrimaryActionLabel,
@@ -1563,6 +1566,7 @@ function ServicePanel({
   const [groupErrors, setGroupErrors] = useState<Record<string, string>>({});
   const [expandedLogs, setExpandedLogs] = useState<string | null>(null);
   const [logLines, setLogLines] = useState<Record<string, string[]>>({});
+  const [externalStopService, setExternalStopService] = useState<ServiceSnapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
   const serviceGroups = project.serviceGroups ?? [];
 
@@ -1573,6 +1577,7 @@ function ServicePanel({
     setGroupBusy(null);
     setGroupDialogOpen(false);
     setGroupErrors({});
+    setExternalStopService(null);
   }, [project.id]);
 
   useEffect(() => {
@@ -1583,7 +1588,20 @@ function ServicePanel({
     setGroupErrors({});
   }, [project.serviceGroups]);
 
-  async function runServiceAction(service: ServiceSnapshot, actionName: "start" | "stop" | "restart") {
+  async function runServiceAction(
+    service: ServiceSnapshot,
+    actionName: "start" | "stop" | "restart",
+    options: { externalStopConfirmed?: boolean } = {}
+  ) {
+    if (
+      actionName === "stop" &&
+      serviceExternalStopConfirmation(service) &&
+      !options.externalStopConfirmed
+    ) {
+      setExternalStopService(service);
+      return;
+    }
+
     setBusyServiceId(service.id);
     setError(null);
     try {
@@ -1851,16 +1869,16 @@ function ServicePanel({
                   {serviceShowProcessControls(service) ? (
                     <>
                       <Button
-                        disabled={busy || !service.startedByConsole}
-                        title="Stop"
+                        disabled={busy || !serviceCanStop(service)}
+                        title={serviceStopTitle(service)}
                         onClick={() => void runServiceAction(service, "stop")}
                       >
                         <Square size={13} />
                         Stop
                       </Button>
                       <Button
-                        disabled={busy || !service.startedByConsole}
-                        title="Restart"
+                        disabled={busy || !serviceCanRestart(service)}
+                        title={serviceRestartTitle(service)}
                         onClick={() => void runServiceAction(service, "restart")}
                       >
                         <RotateCcw size={14} />
@@ -1906,12 +1924,82 @@ function ServicePanel({
           await onServiceChanged(`Added service group ${groupName}.`);
         }}
       />
+      <ServiceExternalStopDialog
+        busy={externalStopService ? busyServiceId === externalStopService.id : false}
+        service={externalStopService}
+        onCancel={() => setExternalStopService(null)}
+        onConfirm={async (service) => {
+          setExternalStopService(null);
+          await runServiceAction(service, "stop", { externalStopConfirmed: true });
+        }}
+      />
     </section>
   );
 }
 
 function serviceCountLabel(count: number) {
   return `${count} service${count === 1 ? "" : "s"}`;
+}
+
+function serviceStopTitle(service: ServiceSnapshot) {
+  if (serviceCanStop(service)) {
+    return service.processOwnership === "project"
+      ? "Stop external process matched to this project"
+      : "Stop";
+  }
+  if (service.processOwnership === "unknown") {
+    return "Stop disabled because the listening process was not matched to this project";
+  }
+  return "Stop";
+}
+
+function serviceRestartTitle(service: ServiceSnapshot) {
+  if (serviceCanRestart(service)) return "Restart";
+  if (service.processOwnership === "project") return "Restart is available only for console-started processes";
+  return "Restart";
+}
+
+function ServiceExternalStopDialog({
+  busy,
+  onCancel,
+  onConfirm,
+  service
+}: {
+  busy: boolean;
+  service: ServiceSnapshot | null;
+  onCancel: () => void;
+  onConfirm: (service: ServiceSnapshot) => Promise<void>;
+}) {
+  const confirmation = service ? serviceExternalStopConfirmation(service) : null;
+
+  return (
+    <Dialog
+      open={!!confirmation}
+      title={confirmation?.title ?? "Stop external service"}
+      onOpenChange={(open) => !open && onCancel()}
+    >
+      {service && confirmation ? (
+        <div className="confirm-body">
+          <p>{confirmation.description}</p>
+          {confirmation.details.map((detail) => (
+            <div className="confirm-target" key={detail.label}>
+              <span>{detail.label}</span>
+              <code>{detail.value}</code>
+            </div>
+          ))}
+          <p>{confirmation.footer}</p>
+          <footer className="dialog-footer">
+            <Button disabled={busy} type="button" variant="ghost" onClick={onCancel}>
+              Cancel
+            </Button>
+            <Button disabled={busy} type="button" variant="danger" onClick={() => void onConfirm(service)}>
+              {busy ? "Stopping..." : "Stop Service"}
+            </Button>
+          </footer>
+        </div>
+      ) : null}
+    </Dialog>
+  );
 }
 
 function serviceGroupActionNotice(response: ServiceGroupActionResponse) {
@@ -2593,10 +2681,14 @@ function serviceStatusTooltip(service: ServiceSnapshot) {
   if (service.status === "running") {
     return service.startedByConsole
       ? "This service was started from this console and is currently running."
-      : "The configured health check or port says this service is already running outside this console.";
+      : service.processOwnership === "project"
+        ? "The configured health check or port says this service is running outside this console, and its process tree matches this project."
+        : "The configured health check or port says this service is already running outside this console.";
   }
   if (service.status === "port-occupied") {
-    return "A configured port is already listening, but this console did not start that process.";
+    return service.processOwnership === "project"
+      ? "A configured port is already listening, and the listening process is matched to this project."
+      : "A configured port is already listening, but this console did not start or recognize that process.";
   }
   if (service.status === "starting") return "The console started the process, but the health check is not passing yet.";
   if (service.status === "error") return "The service check reported an error.";
@@ -2607,7 +2699,13 @@ function serviceStatusTooltip(service: ServiceSnapshot) {
 function serviceKindTooltip(service: ServiceSnapshot) {
   if (service.ports.length === 0 && !service.healthUrl) return "Task mode: click Run to execute it once; Stop and Restart are hidden.";
   if (service.startedByConsole) return "Console-managed process: Stop and Restart are available here.";
-  return "External process: the console can detect it, but will not stop or restart it unless it started it.";
+  if (service.processOwnership === "none") return "Registered long-running service. Start is available when its configured ports are free.";
+  if (service.processOwnership === "project") {
+    return service.processOwnerHint
+      ? `External process matched to this project. ${service.processOwnerHint} Stop is available after confirmation.`
+      : "External process matched to this project. Stop is available after confirmation.";
+  }
+  return "Unknown external process: the console can detect it, but Stop is disabled because the process tree was not matched to this project.";
 }
 
 function portTooltip(port: ServiceSnapshot["portsStatus"][number]) {

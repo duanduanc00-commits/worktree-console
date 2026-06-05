@@ -28,7 +28,7 @@ The app does not scan the full machine. It builds dashboard state from registere
 - `src/server/app.ts` owns API routes and orchestration.
 - `src/server/git.ts` owns Git command execution and parsing.
 - `src/server/registry.ts` owns project, service, and service-group persistence.
-- `src/server/services.ts` owns process spawning, stop/restart behavior, health checks, and port detection.
+- `src/server/services.ts` owns process spawning, stop/restart behavior, health checks, port detection, and process-tree ownership checks.
 - `src/server/health.ts` derives actionable health issues from project snapshots.
 - `src/server/activity.ts` records local operations.
 - `src/shared/types.ts` defines shared API and registry types.
@@ -77,9 +77,10 @@ Services are registered per project with a working directory, command, optional 
 The console distinguishes between:
 
 - Console-managed processes started by Worktree Console.
-- External processes detected through ports or health checks.
+- Project external processes started outside the console whose listening PID process tree matches the registered project path or service working directory.
+- Unknown external processes detected through ports or health checks without a project-path match.
 
-Stop and restart controls are available for console-managed processes. External processes are detected and shown, but the console does not stop them.
+Stop and restart controls are available for console-managed processes. Stop is also available for project external processes after UI confirmation; the backend re-inspects the registered service ports and process tree before terminating any PID. Unknown external processes are detected and shown, but Stop remains disabled. Restart stays console-managed only.
 
 ## Health
 
