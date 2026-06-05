@@ -70,7 +70,7 @@ export function parseGitFilesPayload(body: unknown, changes: WorktreeChange[], l
   const payload = body as { all?: unknown; files?: unknown };
   if (payload?.all === true) {
     if (changes.length === 0) {
-      throw new GitOperationError(400, `No ${label.toLowerCase()} files are currently reported.`);
+      throw new GitOperationError(409, `No ${label.toLowerCase()} files are currently reported.`);
     }
     return unique(changes.map((change) => change.path));
   }
