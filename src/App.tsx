@@ -1,8 +1,11 @@
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent, type ReactNode } from "react";
 import {
   Activity,
+  Archive,
   ArrowLeft,
+  Check,
   Copy,
+  Download,
   ExternalLink,
   FolderOpen,
   GitBranch,
@@ -18,7 +21,9 @@ import {
   Settings,
   Square,
   Terminal,
-  Trash2
+  Trash2,
+  Undo2,
+  Upload
 } from "lucide-react";
 
 import {
@@ -29,6 +34,7 @@ import {
   deleteWorktree,
   getActivity,
   getDashboard,
+  getGitStatus,
   getProjectCommits,
   getServiceLogs,
   getWorktreeDiff,
@@ -44,7 +50,8 @@ import {
   startService,
   stopServiceGroup,
   stopService,
-  updateProjectName
+  updateProjectName,
+  runGitOperation
 } from "./lib/api";
 import {
   serviceCanRestart,
@@ -80,6 +87,13 @@ import {
   worktreePanelLayoutClass
 } from "./lib/diff-ui";
 import {
+  commitDisabledReason,
+  gitPanelLayoutClass,
+  gitSyncDisabledReason,
+  shortGitActionLabel,
+  type GitSyncAction
+} from "./lib/git-ui";
+import {
   AUTO_REFRESH_INTERVAL_MS,
   canStartAutoRefresh,
   finishRefreshRequest,
@@ -93,6 +107,7 @@ import type {
   ActivityEvent,
   BranchInfo,
   DashboardResponse,
+  GitOperationStatus,
   HealthIssue,
   ProjectSnapshot,
   RecentCommit,
@@ -101,6 +116,7 @@ import type {
   ServiceGroupActionResponse,
   ServiceGroupSnapshot,
   ServiceSnapshot,
+  WorktreeChange,
   WorktreeDiffResponse,
   WorktreeInfo
 } from "./shared/types";
@@ -112,7 +128,7 @@ import { SegmentedControl, SegmentButton } from "./components/ui/tabs";
 
 type StatusFilter = "all" | "clean" | "dirty" | "missing";
 type SidebarView = "health" | "projects" | "worktrees" | "registry" | "activity";
-type InspectorTab = "trees" | "branches" | "commits" | "services";
+type InspectorTab = "trees" | "branches" | "commits" | "services" | "git";
 type CommitRange = "24h" | "7d" | "30d" | "all";
 
 const emptyDashboard: DashboardResponse = {
@@ -522,6 +538,10 @@ export function App() {
           onChangesFocusChange={handleChangesFocusChange}
           onResizeStart={handleInspectorResizeStart}
           onServiceChanged={async (message) => {
+            setNotice(message);
+            await refreshAfterOperation();
+          }}
+          onGitChanged={async (message) => {
             setNotice(message);
             await refreshAfterOperation();
           }}
@@ -998,6 +1018,7 @@ function Inspector({
   onEditProject,
   onChangesFocusChange,
   onResizeStart,
+  onGitChanged,
   onServiceChanged,
   onTabChange,
   project,
@@ -1012,6 +1033,7 @@ function Inspector({
   onEditProject: (project: ProjectSnapshot) => void;
   onChangesFocusChange: (focused: boolean) => void;
   onResizeStart: (event: PointerEvent<HTMLButtonElement>) => void;
+  onGitChanged: (message: string) => Promise<void>;
   onServiceChanged: (message: string) => Promise<void>;
   onTabChange: (tab: InspectorTab) => void;
 }) {
@@ -1022,7 +1044,7 @@ function Inspector({
   }, [project?.id]);
 
   useEffect(() => {
-    onChangesFocusChange(tab === "trees" && Boolean(selectedWorktreePath));
+    onChangesFocusChange((tab === "trees" && Boolean(selectedWorktreePath)) || tab === "git");
   }, [onChangesFocusChange, selectedWorktreePath, tab]);
 
   if (!project) {
@@ -1079,6 +1101,9 @@ function Inspector({
         <SegmentButton active={tab === "services"} onClick={() => onTabChange("services")}>
           Services
         </SegmentButton>
+        <SegmentButton active={tab === "git"} onClick={() => onTabChange("git")}>
+          Git
+        </SegmentButton>
       </SegmentedControl>
 
       {project.error ? <div className="error-banner compact">{project.error}</div> : null}
@@ -1110,6 +1135,7 @@ function Inspector({
           onServiceChanged={onServiceChanged}
         />
       ) : null}
+      {tab === "git" ? <GitPanel project={project} onGitChanged={onGitChanged} /> : null}
     </aside>
   );
 }
@@ -1542,6 +1568,356 @@ function CommitPanel({ project }: { project: ProjectSnapshot }) {
           </div>
         ))
       )}
+    </section>
+  );
+}
+
+type GitPanelAction = GitSyncAction | "stash" | "stage" | "unstage" | "commit";
+
+function GitPanel({
+  onGitChanged,
+  project
+}: {
+  project: ProjectSnapshot;
+  onGitChanged: (message: string) => Promise<void>;
+}) {
+  const [status, setStatus] = useState<GitOperationStatus | null>(null);
+  const [selectedFile, setSelectedFile] = useState<string | null>(null);
+  const [diff, setDiff] = useState<WorktreeDiffResponse | null>(null);
+  const [message, setMessage] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [diffLoading, setDiffLoading] = useState(false);
+  const [busyAction, setBusyAction] = useState<GitPanelAction | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [diffError, setDiffError] = useState<string | null>(null);
+  const diffRequestId = useRef(0);
+
+  useEffect(() => {
+    let cancelled = false;
+    const targetPath = project.path;
+    diffRequestId.current += 1;
+    setStatus(null);
+    setSelectedFile(null);
+    setDiff(null);
+    setMessage("");
+    setLoading(true);
+    setDiffLoading(false);
+    setBusyAction(null);
+    setError(null);
+    setDiffError(null);
+
+    void getGitStatus(project.id, targetPath)
+      .then((nextStatus) => {
+        if (!cancelled) setStatus(nextStatus);
+      })
+      .catch((caught) => {
+        if (!cancelled) setError((caught as Error).message);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+      diffRequestId.current += 1;
+    };
+  }, [project.id, project.path]);
+
+  useEffect(() => {
+    if (!status || !selectedFile || gitStatusHasFile(status, selectedFile)) return;
+    resetDiffState();
+  }, [selectedFile, status]);
+
+  function resetDiffState() {
+    diffRequestId.current += 1;
+    setSelectedFile(null);
+    setDiff(null);
+    setDiffLoading(false);
+    setDiffError(null);
+  }
+
+  function applyStatus(nextStatus: GitOperationStatus) {
+    setStatus(nextStatus);
+    if (selectedFile && !gitStatusHasFile(nextStatus, selectedFile)) {
+      resetDiffState();
+    }
+  }
+
+  async function loadDiff(filePath: string) {
+    if (!status) return;
+
+    const requestId = diffRequestId.current + 1;
+    diffRequestId.current = requestId;
+    setSelectedFile(filePath);
+    setDiff(null);
+    setDiffLoading(true);
+    setDiffError(null);
+
+    try {
+      const nextDiff = await getWorktreeDiff(project.id, status.worktreePath, filePath);
+      if (diffRequestId.current !== requestId) return;
+      setDiff(nextDiff);
+    } catch (caught) {
+      if (diffRequestId.current !== requestId) return;
+      setDiffError((caught as Error).message);
+    } finally {
+      if (diffRequestId.current === requestId) {
+        setDiffLoading(false);
+      }
+    }
+  }
+
+  async function runSyncAction(actionName: GitSyncAction) {
+    if (!status || busyAction) return;
+
+    setBusyAction(actionName);
+    setError(null);
+    try {
+      const result = await runGitOperation(project.id, actionName, { path: status.worktreePath });
+      applyStatus(result.status);
+      await onGitChanged(`${syncActionPastTense(actionName)} ${project.name}.`);
+    } catch (caught) {
+      setError((caught as Error).message);
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
+  async function stashChanges() {
+    if (!status || busyAction) return;
+
+    setBusyAction("stash");
+    setError(null);
+    try {
+      const result = await runGitOperation(project.id, "stash", { path: status.worktreePath });
+      applyStatus(result.status);
+      await onGitChanged(`Stashed changes for ${project.name}.`);
+    } catch (caught) {
+      setError((caught as Error).message);
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
+  async function runFileAction(actionName: "stage" | "unstage", filePath: string) {
+    if (!status || busyAction) return;
+
+    setBusyAction(actionName);
+    setError(null);
+    try {
+      const result = await runGitOperation(project.id, actionName, { path: status.worktreePath, files: [filePath] });
+      applyStatus(result.status);
+      await onGitChanged(actionName === "stage" ? `Staged ${filePath}.` : `Unstaged ${filePath}.`);
+    } catch (caught) {
+      setError((caught as Error).message);
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
+  async function commitChanges(event: FormEvent) {
+    event.preventDefault();
+    if (!status || busyAction) return;
+
+    const disabledReason = commitDisabledReason({ stagedCount: status.changes.staged.length, message });
+    if (disabledReason) {
+      setError(disabledReason);
+      return;
+    }
+
+    setBusyAction("commit");
+    setError(null);
+    try {
+      const result = await runGitOperation(project.id, "commit", { path: status.worktreePath, message });
+      setMessage("");
+      setStatus(result.status);
+      await onGitChanged(`Committed ${project.name}.`);
+    } catch (caught) {
+      setError((caught as Error).message);
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
+  function renderChangeRows(changes: WorktreeChange[], actionName: "stage" | "unstage") {
+    if (changes.length === 0) {
+      return <div className="empty-state compact">No {actionName === "stage" ? "unstaged" : "staged"} files.</div>;
+    }
+
+    return changes.map((change) => {
+      const selected = selectedFile === change.path;
+      return (
+        <div className={`git-file-row ${selected ? "selected" : ""}`} key={`${actionName}-${change.code}-${change.path}`}>
+          <button
+            className="git-file-select"
+            onClick={() => void loadDiff(change.path)}
+            type="button"
+          >
+            <span className={`change-code ${changeTone(change.code)}`}>{change.code}</span>
+            <span className="mono">{change.path}</span>
+          </button>
+          <Button
+            disabled={Boolean(busyAction)}
+            title={actionName === "stage" ? "Move into staged files" : "Move out of staged files"}
+            onClick={() => void runFileAction(actionName, change.path)}
+          >
+            {actionName === "unstage" ? <Undo2 size={13} /> : <Check size={13} />}
+            {shortGitActionLabel(actionName)}
+          </Button>
+        </div>
+      );
+    });
+  }
+
+  const totalChanges = status ? status.changes.staged.length + status.changes.unstaged.length : 0;
+  const commitReason = status
+    ? commitDisabledReason({ stagedCount: status.changes.staged.length, message })
+    : "Loading git status.";
+  const stashReason = !status ? "Loading git status." : status.clean ? "No local changes to stash." : null;
+  const syncActions: GitSyncAction[] = ["fetch", "pull", "push"];
+
+  return (
+    <section className={gitPanelLayoutClass()}>
+      <div className="section-heading">
+        <h3>Git</h3>
+        {status ? (
+          <Badge tone={status.clean ? "clean" : "dirty"}>{status.clean ? "Clean" : `${totalChanges} changed`}</Badge>
+        ) : null}
+      </div>
+
+      <div className="git-summary-grid">
+        <div className="git-card">
+          <div className="git-card-heading">
+            <h4>Status</h4>
+            {loading ? <Badge>Loading</Badge> : null}
+          </div>
+          {loading ? (
+            <div className="empty-state compact">Loading git status...</div>
+          ) : status ? (
+            <div className="git-meta-grid">
+              <span>Branch</span>
+              <strong className="mono">{status.branch}</strong>
+              <span>Upstream</span>
+              <strong className="mono">{status.upstream ?? "No upstream"}</strong>
+              <span>Ahead / behind</span>
+              <strong>
+                {status.ahead} / {status.behind}
+              </strong>
+              <span>Worktree</span>
+              <strong className="mono">{status.worktreePath}</strong>
+            </div>
+          ) : (
+            <div className="empty-state compact">Git status is unavailable.</div>
+          )}
+        </div>
+
+        <div className="git-card">
+          <div className="git-card-heading">
+            <h4>Sync</h4>
+            {status ? <span className="mono">{status.stashes.length} stashes</span> : null}
+          </div>
+          <div className="git-actions">
+            {syncActions.map((actionName) => {
+              const disabledReason = status ? gitSyncDisabledReason(actionName, status) : "Loading git status.";
+              return (
+                <Button
+                  disabled={Boolean(disabledReason) || Boolean(busyAction)}
+                  key={actionName}
+                  title={disabledReason ?? syncActionTitle(actionName)}
+                  onClick={() => void runSyncAction(actionName)}
+                >
+                  {actionName === "fetch" ? (
+                    <RefreshCw size={14} />
+                  ) : actionName === "pull" ? (
+                    <Download size={14} />
+                  ) : (
+                    <Upload size={14} />
+                  )}
+                  {syncActionLabel(actionName)}
+                </Button>
+              );
+            })}
+            <Button
+              disabled={Boolean(stashReason) || Boolean(busyAction)}
+              title={stashReason ?? "Stash local changes"}
+              onClick={() => void stashChanges()}
+            >
+              <Archive size={14} />
+              Stash changes
+            </Button>
+          </div>
+        </div>
+      </div>
+
+      {error ? <div className="error-banner compact">{error}</div> : null}
+
+      {status ? (
+        <div className="git-workspace">
+          <div className="git-column">
+            <div className="git-column-heading">
+              <h4>Unstaged</h4>
+              <Badge tone={status.changes.unstaged.length === 0 ? "clean" : "dirty"}>
+                {status.changes.unstaged.length}
+              </Badge>
+            </div>
+            <div className="git-file-list">{renderChangeRows(status.changes.unstaged, "stage")}</div>
+          </div>
+
+          <div className="git-diff">
+            <div className="git-column-heading">
+              <h4>Diff</h4>
+              {selectedFile ? <span className="git-diff-file">{selectedFile}</span> : null}
+            </div>
+            {diffLoading ? (
+              <div className="empty-state compact">Loading diff...</div>
+            ) : diffError ? (
+              <div className="error-banner compact">{diffError}</div>
+            ) : diff ? (
+              <>
+                {diff.truncated ? (
+                  <div className="git-diff-note">
+                    <Badge tone="dirty">Truncated</Badge>
+                    <span>{diff.lineCount} diff lines</span>
+                  </div>
+                ) : null}
+                <DiffPreview diff={diff} />
+              </>
+            ) : (
+              <div className="empty-state compact">Select a file to preview its diff.</div>
+            )}
+          </div>
+
+          <div className="git-column">
+            <div className="git-column-heading">
+              <h4>Staged</h4>
+              <Badge tone={status.changes.staged.length === 0 ? "neutral" : "dirty"}>
+                {status.changes.staged.length}
+              </Badge>
+            </div>
+            <div className="git-file-list">{renderChangeRows(status.changes.staged, "unstage")}</div>
+            <form className="git-commit-form" onSubmit={(event) => void commitChanges(event)}>
+              <label>
+                <span>Commit message</span>
+                <textarea
+                  placeholder="Describe the staged change"
+                  rows={4}
+                  value={message}
+                  onChange={(event) => setMessage(event.target.value)}
+                />
+              </label>
+              <Button
+                disabled={Boolean(commitReason) || Boolean(busyAction)}
+                title={commitReason ?? "Commit staged files"}
+                type="submit"
+                variant="primary"
+              >
+                <Check size={14} />
+                {busyAction === "commit" ? "Committing..." : "Commit"}
+              </Button>
+            </form>
+          </div>
+        </div>
+      ) : null}
     </section>
   );
 }
@@ -2732,6 +3108,28 @@ function commitRangeLabel(range: CommitRange) {
   if (range === "7d") return "7d";
   if (range === "30d") return "30d";
   return "All";
+}
+
+function gitStatusHasFile(status: GitOperationStatus, filePath: string) {
+  return [...status.changes.unstaged, ...status.changes.staged].some((change) => change.path === filePath);
+}
+
+function syncActionLabel(actionName: GitSyncAction) {
+  if (actionName === "fetch") return "Fetch";
+  if (actionName === "pull") return "Pull";
+  return "Push";
+}
+
+function syncActionTitle(actionName: GitSyncAction) {
+  if (actionName === "fetch") return "Fetch remote refs";
+  if (actionName === "pull") return "Pull from upstream";
+  return "Push local commits";
+}
+
+function syncActionPastTense(actionName: GitSyncAction) {
+  if (actionName === "fetch") return "Fetched";
+  if (actionName === "pull") return "Pulled";
+  return "Pushed";
 }
 
 function parsePortInput(input: string) {

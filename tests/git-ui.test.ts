@@ -1,4 +1,10 @@
-import { describe, expect, it } from "vitest";
+// @vitest-environment jsdom
+
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { createElement } from "react";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import { App } from "../src/App";
 
 import {
   commitDisabledReason,
@@ -6,6 +12,12 @@ import {
   gitSyncDisabledReason,
   shortGitActionLabel
 } from "../src/lib/git-ui";
+import type { DashboardResponse, ProjectSnapshot } from "../src/shared/types";
+
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+});
 
 describe("git-ui helpers", () => {
   it("uses wide focused layout when the Git tab is active", () => {
@@ -41,4 +53,92 @@ describe("git-ui helpers", () => {
       "Pull or review upstream changes first."
     );
   });
+
+  it("renders the Git tab as a focused wide inspector view", async () => {
+    Object.defineProperty(window, "innerWidth", {
+      configurable: true,
+      value: 1600
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        if (String(input) === "/api/projects") {
+          return new Response(JSON.stringify(dashboardFixture()), {
+            headers: { "Content-Type": "application/json" },
+            status: 200
+          });
+        }
+
+        return new Response(JSON.stringify({ error: `Unexpected request: ${String(input)}` }), {
+          headers: { "Content-Type": "application/json" },
+          status: 500
+        });
+      })
+    );
+
+    const { container } = render(createElement(App));
+
+    fireEvent.click(await screen.findByRole("button", { name: "Git" }));
+
+    await waitFor(() => {
+      expect((container.querySelector(".app-body") as HTMLElement).style.getPropertyValue("--inspector-width")).toBe(
+        "928px"
+      );
+    });
+  });
 });
+
+function dashboardFixture(): DashboardResponse {
+  const project: ProjectSnapshot = {
+    id: "project-1",
+    name: "Console",
+    path: "E:/repo/console",
+    tags: [],
+    pinned: false,
+    createdAt: "2026-06-05T00:00:00.000Z",
+    updatedAt: "2026-06-05T00:00:00.000Z",
+    exists: true,
+    isGitRepository: true,
+    status: "dirty",
+    branch: {
+      branch: "main",
+      upstream: "origin/main",
+      ahead: 0,
+      behind: 0,
+      dirtyFiles: 1,
+      clean: false
+    },
+    branches: [],
+    recentCommits: [],
+    services: [],
+    serviceGroups: [],
+    worktrees: []
+  };
+
+  return {
+    projects: [project],
+    summary: {
+      projects: 1,
+      worktrees: 0,
+      services: 0,
+      runningServices: 0,
+      dirty: 1,
+      missing: 0,
+      clean: 0
+    },
+    health: {
+      counts: {
+        critical: 0,
+        warning: 0,
+        info: 0,
+        dirtyProjects: 1,
+        dirtyWorktrees: 0,
+        cleanupCandidates: 0,
+        stoppedServices: 0,
+        occupiedPorts: 0,
+        missingProjects: 0
+      },
+      issues: []
+    }
+  };
+}
