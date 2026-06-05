@@ -67,6 +67,19 @@ describe("git operation helpers", () => {
     ]);
   });
 
+  it("stashes an untracked-only worktree", async () => {
+    await writeFile(join(repoPath, "notes.txt"), "new draft\n");
+
+    await createStash(repoPath, "untracked draft");
+
+    expect(await readStashes(repoPath)).toEqual([
+      expect.objectContaining({
+        message: expect.stringContaining("untracked draft")
+      })
+    ]);
+    expect((await git(repoPath, ["status", "--short"])).stdout).not.toContain("notes.txt");
+  });
+
   it("parses stash subjects that do not include an On branch prefix", () => {
     expect(parseStashList("stash@{3}\u001fWIP without branch prefix\n")).toEqual([
       {

@@ -329,7 +329,7 @@ export async function commitStagedFiles(path: string, message: string): Promise<
 }
 
 export async function createStash(path: string, message?: string): Promise<void> {
-  const args = ["stash", "push"];
+  const args = ["stash", "push", "--include-untracked"];
   const trimmedMessage = message?.trim();
   if (trimmedMessage) {
     args.push("-m", trimmedMessage);
