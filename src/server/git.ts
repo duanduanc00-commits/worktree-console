@@ -4,7 +4,14 @@ import { join } from "node:path";
 import { promisify } from "node:util";
 import { execFile } from "node:child_process";
 
-import type { BranchStatus, RecentCommit, WorktreeChange, WorktreeInfo } from "../shared/types";
+import type {
+  BranchStatus,
+  GitOperationChangeGroups,
+  GitStashEntry,
+  RecentCommit,
+  WorktreeChange,
+  WorktreeInfo
+} from "../shared/types";
 
 const execFileAsync = promisify(execFile);
 const prettyCommitFormat = "--pretty=format:%h%x1f%s%x1f%an%x1f%cr";
@@ -182,6 +189,13 @@ export async function readWorktreeChanges(path: string): Promise<WorktreeChange[
   return parseShortStatusChanges(stdout);
 }
 
+export function splitGitOperationChanges(changes: WorktreeChange[]): GitOperationChangeGroups {
+  return {
+    staged: changes.filter(hasStagedChange),
+    unstaged: changes.filter((change) => hasUnstagedChange(change) || isUntrackedChange(change))
+  };
+}
+
 export function buildWorktreeDiffArgs(filePath: string): string[] {
   return ["diff", ...safeDiffArgs, "--", filePath];
 }
@@ -288,6 +302,61 @@ export async function removeWorktree(repositoryPath: string, worktreePath: strin
 
 export async function deleteBranch(repositoryPath: string, branch: string): Promise<void> {
   await git(repositoryPath, ["branch", "-d", branch]);
+}
+
+export async function fetchRepository(path: string): Promise<void> {
+  await git(path, ["fetch", "--prune"]);
+}
+
+export async function pullRepository(path: string): Promise<void> {
+  await git(path, ["pull", "--ff-only"]);
+}
+
+export async function pushRepository(path: string): Promise<void> {
+  await git(path, ["push"]);
+}
+
+export async function stageFiles(path: string, filePaths: string[]): Promise<void> {
+  await git(path, ["add", "--", ...filePaths]);
+}
+
+export async function unstageFiles(path: string, filePaths: string[]): Promise<void> {
+  await git(path, ["restore", "--staged", "--", ...filePaths]);
+}
+
+export async function commitStagedFiles(path: string, message: string): Promise<void> {
+  await git(path, ["commit", "-m", message]);
+}
+
+export async function createStash(path: string, message?: string): Promise<void> {
+  const args = ["stash", "push", "--include-untracked"];
+  const trimmedMessage = message?.trim();
+  if (trimmedMessage) {
+    args.push("-m", trimmedMessage);
+  }
+  await git(path, args);
+}
+
+export function parseStashList(output: string): GitStashEntry[] {
+  return output
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .map((line) => {
+      const [name = "", subject = ""] = line.split("\u001f");
+      const index = Number(name.match(/stash@\{(\d+)\}/)?.[1] ?? 0);
+      const subjectMatch = subject.match(/^On (?<branch>[^:]+):\s*(?<message>.*)$/);
+      return {
+        index,
+        name,
+        branch: subjectMatch?.groups?.branch ?? null,
+        message: subjectMatch?.groups?.message ?? subject
+      };
+    });
+}
+
+export async function readStashes(path: string): Promise<GitStashEntry[]> {
+  const { stdout } = await git(path, ["stash", "list", "--format=%gd%x1f%gs"]);
+  return parseStashList(stdout);
 }
 
 export function buildRecentCommitArgs(options: RecentCommitOptions = {}): string[] {

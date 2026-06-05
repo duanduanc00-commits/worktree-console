@@ -34,6 +34,7 @@ The app does not scan the full machine. It builds dashboard state from registere
 - `src/server/app.ts` owns API routes and orchestration.
 - `src/server/runtime.ts` owns packaged runtime configuration, CLI flags, user data paths, static frontend serving, and browser opening.
 - `src/server/git.ts` owns Git command execution and parsing.
+- `src/server/gitOperations.ts` owns route-safe Git operation target validation, status building, and safety checks.
 - `src/server/registry.ts` owns project, service, and service-group persistence.
 - `src/server/services.ts` owns process spawning, stop/restart behavior, health checks, port detection, and process-tree ownership checks.
 - `src/server/health.ts` derives actionable health issues from project snapshots.
@@ -82,6 +83,12 @@ Destructive Git actions follow a conservative flow:
 - Branches currently used by a worktree are blocked from deletion.
 - Deletion actions require confirmation.
 - Diff previews are bounded and tied to files reported by the matching worktree snapshot.
+
+Daily Git operations live under project-scoped `/api/projects/:id/git/*` routes. `GET /api/projects/:id/git/status` resolves the selected registered project or worktree and builds the current Git operation status. Mutation routes are `fetch`, `pull`, `push`, `stage`, `unstage`, `commit`, and `stash`.
+
+Before any mutation executes, the API re-reads the registered project snapshot and validates the selected target against that snapshot. After the Git command runs, the response returns refreshed Git operation status for the same target. Each attempt is recorded in Activity as `git.*` with `targetType: "git"`.
+
+Operation scope is intentionally narrow: pull is blocked when local changes are present or the branch is diverged, push is ordinary `git push` only, and commit requires staged files plus a non-empty message.
 
 ## Service Safety
 

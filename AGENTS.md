@@ -86,6 +86,7 @@ When changing local data behavior, destructive actions, service controls, Git cl
 - `src/server/app.ts` owns API routing and orchestration.
 - `src/server/runtime.ts` owns packaged runtime config, user data paths, CLI flags, static frontend serving, and browser opening.
 - `src/server/git.ts` owns Git command helpers and parsers.
+- `src/server/gitOperations.ts` owns route-safe Git operation validation, status building, and safety checks.
 - `src/server/registry.ts` owns persistent project, service, and service-group registration.
 - `src/server/services.ts` owns local process, process-tree ownership, and port detection.
 - `src/server/health.ts` derives health issues from project snapshots only; keep it pure.
@@ -98,12 +99,15 @@ When changing local data behavior, destructive actions, service controls, Git cl
 
 - Keep the app local-first. Avoid adding remote telemetry, hosted storage, or background scanning unless explicitly requested.
 - Keep destructive Git cleanup conservative. Worktree and branch deletion must stay behind safety assessment and confirmation.
+- Git operation routes must re-read registered project snapshots before running commands.
+- Do not add force push, merge, rebase, checkout, stash apply/drop, or remote setup without a separate design.
 - Detached worktrees should not be marked safe when their HEAD is not contained by any reported branch.
 - Do not stop unknown external processes that were only detected by port. Service controls may stop console-started processes, and may stop external processes only when the backend matches the listening PID's process tree to the registered project path or service working directory.
 - Keep diff APIs bounded and only allow diffs for changed files reported by the corresponding worktree snapshot.
 - Health summary cards are interactive filters. Keep their labels and tooltip text short.
 - Activity log should record meaningful user actions, especially destructive actions and service operations.
 - The browser dashboard refreshes automatically every 30 seconds while the tab is visible. Keep auto-refresh policy in `src/lib/refresh-ui.ts` so it stays directly testable.
+- UI layouts for Git operations must keep `min-width: 0` containment and avoid horizontal overflow.
 
 ## UI Conventions
 

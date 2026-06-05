@@ -2,6 +2,8 @@ import type {
   ActivityEvent,
   ActivityResponse,
   DashboardResponse,
+  GitOperationResponse,
+  GitOperationStatus,
   RecentCommit,
   RegisteredProject,
   RegisteredService,
@@ -31,6 +33,22 @@ export type AddServiceGroupPayload = {
 };
 
 export type UpdateServiceGroupPayload = Partial<AddServiceGroupPayload>;
+
+export type GitOperationAction = "fetch" | "pull" | "push" | "stage" | "unstage" | "commit" | "stash";
+
+type GitTargetPayload = { path?: string };
+
+type GitFileSelectionPayload = GitTargetPayload & ({ files: string[]; all?: false } | { all: true; files?: never });
+
+export type GitOperationPayloads = {
+  fetch: GitTargetPayload;
+  pull: GitTargetPayload;
+  push: GitTargetPayload;
+  stage: GitFileSelectionPayload;
+  unstage: GitFileSelectionPayload;
+  commit: GitTargetPayload & { message: string };
+  stash: GitTargetPayload & { message?: string | null };
+};
 
 export async function getDashboard(): Promise<DashboardResponse> {
   return request<DashboardResponse>("/api/projects");
@@ -86,6 +104,22 @@ export async function getWorktreeDiff(
 ): Promise<WorktreeDiffResponse> {
   const params = new URLSearchParams({ path: worktreePath, file: filePath });
   return request<WorktreeDiffResponse>(`/api/projects/${projectId}/worktrees/diff?${params.toString()}`);
+}
+
+export async function getGitStatus(projectId: string, worktreePath: string): Promise<GitOperationStatus> {
+  const params = new URLSearchParams({ path: worktreePath });
+  return request<GitOperationStatus>(`/api/projects/${projectId}/git/status?${params.toString()}`);
+}
+
+export async function runGitOperation<Action extends GitOperationAction>(
+  projectId: string,
+  action: Action,
+  body: GitOperationPayloads[Action]
+): Promise<GitOperationResponse> {
+  return request<GitOperationResponse>(`/api/projects/${projectId}/git/${action}`, {
+    method: "POST",
+    body: JSON.stringify(body)
+  });
 }
 
 export async function deleteBranch(projectId: string, branch: string): Promise<void> {

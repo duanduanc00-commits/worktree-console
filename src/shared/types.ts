@@ -77,6 +77,35 @@ export type WorktreeChange = {
   raw: string;
 };
 
+export type GitOperationChangeGroups = {
+  staged: WorktreeChange[];
+  unstaged: WorktreeChange[];
+};
+
+export type GitStashEntry = {
+  index: number;
+  name: string;
+  branch: string | null;
+  message: string;
+};
+
+export type GitOperationStatus = {
+  projectId: string;
+  worktreePath: string;
+  branch: string;
+  upstream: string | null;
+  ahead: number;
+  behind: number;
+  clean: boolean;
+  changes: GitOperationChangeGroups;
+  stashes: GitStashEntry[];
+};
+
+export type GitOperationResponse = {
+  ok: true;
+  status: GitOperationStatus;
+};
+
 export type WorktreeDiffResponse = {
   worktreePath: string;
   filePath: string;
@@ -208,7 +237,7 @@ export type DashboardResponse = {
   health: HealthSummary;
 };
 
-export type ActivityTargetType = "project" | "worktree" | "branch" | "service" | "service-group";
+export type ActivityTargetType = "project" | "worktree" | "branch" | "service" | "service-group" | "git";
 
 export type ActivityEvent = {
   id: string;

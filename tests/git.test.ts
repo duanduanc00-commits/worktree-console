@@ -14,6 +14,7 @@ import {
   parseBranchTrackingRefs,
   parseBranchStatus,
   parseShortStatusChanges,
+  splitGitOperationChanges,
   parseWorktreeList
 } from "../src/server/git";
 
@@ -141,6 +142,29 @@ describe("parseShortStatusChanges", () => {
       { code: "M", path: "src/café.txt", raw: " M src/café.txt" },
       { code: "??", path: "docs/说明.md", raw: "?? docs/说明.md" }
     ]);
+  });
+});
+
+describe("splitGitOperationChanges", () => {
+  it("splits staged and unstaged changes from porcelain status", () => {
+    const changes = [
+      { code: "M", path: "src/staged.ts", raw: "M  src/staged.ts" },
+      { code: "M", path: "src/unstaged.ts", raw: " M src/unstaged.ts" },
+      { code: "M", path: "src/both.ts", raw: "MM src/both.ts" },
+      { code: "??", path: "src/new.ts", raw: "?? src/new.ts" }
+    ];
+
+    expect(splitGitOperationChanges(changes)).toEqual({
+      staged: [
+        { code: "M", path: "src/staged.ts", raw: "M  src/staged.ts" },
+        { code: "M", path: "src/both.ts", raw: "MM src/both.ts" }
+      ],
+      unstaged: [
+        { code: "M", path: "src/unstaged.ts", raw: " M src/unstaged.ts" },
+        { code: "M", path: "src/both.ts", raw: "MM src/both.ts" },
+        { code: "??", path: "src/new.ts", raw: "?? src/new.ts" }
+      ]
+    });
   });
 });
 

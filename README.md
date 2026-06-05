@@ -15,6 +15,7 @@ The app only tracks projects you register. Runtime data stays local and is ignor
 - Inspect worktrees, local branches, upstream/gone-upstream state, ahead/behind counts, recent commits, and safe-removal status.
 - Associate branch rows with their owning worktree and open related changes when local modifications exist.
 - Open a bounded diff preview for changed worktree files without leaving the console.
+- Run daily Git operations from a wide project Git tab: fetch, pull, push, stage, unstage, commit, and stash.
 - Choose recent commit count or time range for the main registered project checkout.
 - Register project services and one-shot tasks with local commands, ports, health URLs, and log previews.
 - Start, stop, restart, and open services from the console, with safer handling for externally started processes.
@@ -115,6 +116,8 @@ Worktree Console reads Git state from the registered project path and its linked
 - Dirty worktrees and the registered project checkout are blocked from one-click removal.
 - Clean detached worktrees are marked for review when their HEAD is not contained by any reported branch.
 - Branches currently used by a worktree are marked in use.
+
+Git operation controls validate the selected worktree against the registered project snapshot before running commands. Pull is blocked for dirty or diverged branches. Push does not support force push. Commit uses staged files only and requires a non-empty message.
 
 Diff previews are bounded so the API does not return unbounded file diffs.
 
