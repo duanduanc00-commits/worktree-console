@@ -2,6 +2,8 @@ import type {
   ActivityEvent,
   ActivityResponse,
   DashboardResponse,
+  GitOperationResponse,
+  GitOperationStatus,
   RecentCommit,
   RegisteredProject,
   RegisteredService,
@@ -86,6 +88,22 @@ export async function getWorktreeDiff(
 ): Promise<WorktreeDiffResponse> {
   const params = new URLSearchParams({ path: worktreePath, file: filePath });
   return request<WorktreeDiffResponse>(`/api/projects/${projectId}/worktrees/diff?${params.toString()}`);
+}
+
+export async function getGitStatus(projectId: string, worktreePath: string): Promise<GitOperationStatus> {
+  const params = new URLSearchParams({ path: worktreePath });
+  return request<GitOperationStatus>(`/api/projects/${projectId}/git/status?${params.toString()}`);
+}
+
+export async function runGitOperation(
+  projectId: string,
+  action: "fetch" | "pull" | "push" | "stage" | "unstage" | "commit" | "stash",
+  body: Record<string, unknown>
+): Promise<GitOperationResponse> {
+  return request<GitOperationResponse>(`/api/projects/${projectId}/git/${action}`, {
+    method: "POST",
+    body: JSON.stringify(body)
+  });
 }
 
 export async function deleteBranch(projectId: string, branch: string): Promise<void> {
