@@ -520,6 +520,71 @@ describe("createApp", () => {
       .expect(404);
   });
 
+  it("returns git operation status for a registered worktree", async () => {
+    const repoPath = join(tempDir, "repo");
+    await createGitRepo(repoPath);
+    await writeFileText(repoPath, "README.md", "changed\n");
+    await git(repoPath, ["add", "README.md"]);
+    await writeFileText(repoPath, "src/App.tsx", "unstaged\n");
+
+    const registry = new ProjectRegistry(join(tempDir, "projects.json"));
+    const app = createApp({
+      activityLog: new ActivityLog(join(tempDir, "activity.json")),
+      registry
+    });
+    const project = await registry.addProject({ name: "Repo", path: repoPath, tags: [] });
+
+    const response = await request(app)
+      .get(`/api/projects/${project.id}/git/status`)
+      .query({ path: repoPath })
+      .expect(200);
+
+    expect(response.body).toMatchObject({
+      projectId: project.id,
+      worktreePath: expect.any(String),
+      changes: {
+        staged: [expect.objectContaining({ path: "README.md" })],
+        unstaged: [expect.objectContaining({ path: "src/App.tsx" })]
+      }
+    });
+    expect(normalizePath(response.body.worktreePath)).toBe(normalizePath(repoPath));
+  });
+
+  it("rejects staging files not reported by git status", async () => {
+    const repoPath = join(tempDir, "repo");
+    await createGitRepo(repoPath);
+    const registry = new ProjectRegistry(join(tempDir, "projects.json"));
+    const app = createApp({
+      activityLog: new ActivityLog(join(tempDir, "activity.json")),
+      registry
+    });
+    const project = await registry.addProject({ name: "Repo", path: repoPath, tags: [] });
+
+    await request(app)
+      .post(`/api/projects/${project.id}/git/stage`)
+      .send({ path: repoPath, files: ["not-reported.txt"] })
+      .expect(400);
+  });
+
+  it("records failed git operations in activity", async () => {
+    const repoPath = join(tempDir, "repo");
+    await createGitRepo(repoPath);
+    await writeFileText(repoPath, "README.md", "dirty\n");
+    const activityLog = new ActivityLog(join(tempDir, "activity.json"));
+    const registry = new ProjectRegistry(join(tempDir, "projects.json"));
+    const app = createApp({ activityLog, registry });
+    const project = await registry.addProject({ name: "Repo", path: repoPath, tags: [] });
+
+    await request(app).post(`/api/projects/${project.id}/git/pull`).send({ path: repoPath }).expect(409);
+
+    const activity = await request(app).get("/api/activity").expect(200);
+    expect(activity.body.events[0]).toMatchObject({
+      action: "git.pull",
+      status: "failed",
+      targetType: "git"
+    });
+  });
+
   it("returns a bounded changed-file diff and rejects unchanged files", async () => {
     const repoPath = join(tempDir, "repo");
     await createGitRepo(repoPath);

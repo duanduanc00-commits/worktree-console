@@ -8,7 +8,12 @@ import express from "express";
 import {
   isGitRepository,
   pathExists,
+  commitStagedFiles,
+  createStash,
   deleteBranch,
+  fetchRepository,
+  pullRepository,
+  pushRepository,
   readBranches,
   readBranchStatus,
   readBranchTracking,
@@ -19,8 +24,19 @@ import {
   readWorktreeFileDiff,
   readWorktreeChanges,
   readWorktrees,
-  removeWorktree
+  removeWorktree,
+  stageFiles,
+  unstageFiles
 } from "./git";
+import {
+  GitOperationError,
+  assertCanCommit,
+  assertCanPull,
+  assertCanPush,
+  assertCanStash,
+  buildGitOperationStatus,
+  parseGitFilesPayload
+} from "./gitOperations";
 import { ActivityLog, type ActivityInput } from "./activity";
 import { ProjectRegistry } from "./registry";
 import { assessWorktreeRemoval, buildBranchInfo } from "./safety";
@@ -30,6 +46,8 @@ import { buildHealthSummary } from "./health";
 import type {
   ActivityEvent,
   DashboardResponse,
+  GitOperationResponse,
+  GitOperationStatus,
   ProjectSnapshot,
   RegisteredProject,
   RegisteredService,
@@ -63,6 +81,19 @@ type ServiceController = {
   stop(projectId: string, service: RegisteredService, projectPath?: string): Promise<ServiceSnapshot>;
   restart(projectId: string, service: RegisteredService, projectPath?: string): Promise<ServiceSnapshot>;
   logs(projectId: string, serviceId: string): Promise<string[]>;
+};
+
+type GitMutationAction = "fetch" | "pull" | "push" | "stage" | "unstage" | "commit" | "stash";
+
+type GitMutationOptions = {
+  activityLog: ActivityRecorder;
+  registry: ProjectRegistry;
+  serviceManager: ServiceController;
+  projectId: string;
+  body: unknown;
+  action: GitMutationAction;
+  label: string;
+  execute: (status: GitOperationStatus, body: unknown) => Promise<string>;
 };
 
 class HttpError extends Error {
@@ -453,6 +484,177 @@ export function createApp({
     }
   });
 
+  app.get("/api/projects/:id/git/status", async (request, response, next) => {
+    try {
+      const project = await findProject(registry, request.params.id);
+      const snapshot = await snapshotProject(project, serviceManager);
+      response.json(await buildGitOperationStatus(project, snapshot, queryPath(request.query.path)));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/projects/:id/git/fetch", async (request, response, next) => {
+    try {
+      response.status(202).json(
+        await runGitMutation({
+          activityLog,
+          registry,
+          serviceManager,
+          projectId: request.params.id,
+          body: request.body,
+          action: "fetch",
+          label: "Fetched branch",
+          execute: async (status) => {
+            await fetchRepository(status.worktreePath);
+            return `Fetched ${status.branch}`;
+          }
+        })
+      );
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/projects/:id/git/pull", async (request, response, next) => {
+    try {
+      response.status(202).json(
+        await runGitMutation({
+          activityLog,
+          registry,
+          serviceManager,
+          projectId: request.params.id,
+          body: request.body,
+          action: "pull",
+          label: "Pulled branch",
+          execute: async (status) => {
+            assertCanPull(status);
+            await pullRepository(status.worktreePath);
+            return `Pulled ${status.branch}`;
+          }
+        })
+      );
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/projects/:id/git/push", async (request, response, next) => {
+    try {
+      response.status(202).json(
+        await runGitMutation({
+          activityLog,
+          registry,
+          serviceManager,
+          projectId: request.params.id,
+          body: request.body,
+          action: "push",
+          label: "Pushed branch",
+          execute: async (status) => {
+            assertCanPush(status);
+            await pushRepository(status.worktreePath);
+            return `Pushed ${status.branch}`;
+          }
+        })
+      );
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/projects/:id/git/stage", async (request, response, next) => {
+    try {
+      response.status(202).json(
+        await runGitMutation({
+          activityLog,
+          registry,
+          serviceManager,
+          projectId: request.params.id,
+          body: request.body,
+          action: "stage",
+          label: "Staged files",
+          execute: async (status, body) => {
+            const files = parseGitFilesPayload(body, status.changes.unstaged, "Stage");
+            await stageFiles(status.worktreePath, files);
+            return `Staged ${describeFileCount(files.length)}`;
+          }
+        })
+      );
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/projects/:id/git/unstage", async (request, response, next) => {
+    try {
+      response.status(202).json(
+        await runGitMutation({
+          activityLog,
+          registry,
+          serviceManager,
+          projectId: request.params.id,
+          body: request.body,
+          action: "unstage",
+          label: "Unstaged files",
+          execute: async (status, body) => {
+            const files = parseGitFilesPayload(body, status.changes.staged, "Unstage");
+            await unstageFiles(status.worktreePath, files);
+            return `Unstaged ${describeFileCount(files.length)}`;
+          }
+        })
+      );
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/projects/:id/git/commit", async (request, response, next) => {
+    try {
+      response.status(202).json(
+        await runGitMutation({
+          activityLog,
+          registry,
+          serviceManager,
+          projectId: request.params.id,
+          body: request.body,
+          action: "commit",
+          label: "Committed staged files",
+          execute: async (status, body) => {
+            const message = assertCanCommit(status, requiredString((body as { message?: unknown })?.message, "Commit message"));
+            await commitStagedFiles(status.worktreePath, message);
+            return message;
+          }
+        })
+      );
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/projects/:id/git/stash", async (request, response, next) => {
+    try {
+      response.status(202).json(
+        await runGitMutation({
+          activityLog,
+          registry,
+          serviceManager,
+          projectId: request.params.id,
+          body: request.body,
+          action: "stash",
+          label: "Stashed changes",
+          execute: async (status, body) => {
+            assertCanStash(status);
+            const message = optionalString((body as { message?: unknown })?.message, "Stash message");
+            await createStash(status.worktreePath, message);
+            return message ? `Stashed ${message}` : `Stashed changes on ${status.branch}`;
+          }
+        })
+      );
+    } catch (error) {
+      next(error);
+    }
+  });
+
   app.get("/api/projects/:id/worktrees/diff", async (request, response, next) => {
     try {
       const worktreePath = request.query.path;
@@ -572,7 +774,7 @@ export function createApp({
   }
 
   app.use((error: Error, _request: express.Request, response: express.Response, _next: express.NextFunction) => {
-    const status = error instanceof HttpError ? error.status : 500;
+    const status = error instanceof HttpError || error instanceof GitOperationError ? error.status : 500;
     response.status(status).json({ error: error.message });
   });
 
@@ -698,6 +900,103 @@ export async function snapshotProject(
       error: (error as Error).message
     };
   }
+}
+
+async function runGitMutation(options: GitMutationOptions): Promise<GitOperationResponse> {
+  let project: RegisteredProject | null = null;
+  let status: GitOperationStatus | null = null;
+
+  try {
+    project = await findProject(options.registry, options.projectId);
+    const snapshot = await snapshotProject(project, options.serviceManager);
+    status = await buildGitOperationStatus(project, snapshot, bodyPath(options.body));
+    const detail = await options.execute(status, options.body);
+    const refreshedSnapshot = await snapshotProject(project, options.serviceManager);
+    const refreshedStatus = await buildGitOperationStatus(project, refreshedSnapshot, status.worktreePath);
+
+    await recordGitOperationActivity(options.activityLog, project, {
+      action: options.action,
+      label: options.label,
+      target: status.worktreePath,
+      status: "success",
+      detail
+    });
+
+    return { ok: true, status: refreshedStatus };
+  } catch (error) {
+    if (project) {
+      await recordGitOperationActivity(options.activityLog, project, {
+        action: options.action,
+        label: options.label,
+        target: status?.worktreePath ?? project.path,
+        status: "failed",
+        detail: error instanceof Error ? error.message : String(error)
+      });
+    }
+    throw error;
+  }
+}
+
+async function recordGitOperationActivity(
+  activityLog: ActivityRecorder,
+  project: RegisteredProject,
+  input: {
+    action: GitMutationAction;
+    label: string;
+    target: string;
+    status: ActivityEvent["status"];
+    detail: string;
+  }
+): Promise<void> {
+  await recordActivity(activityLog, {
+    action: `git.${input.action}`,
+    label: input.label,
+    ...projectActivity(project),
+    targetType: "git",
+    target: input.target,
+    status: input.status,
+    detail: input.detail
+  });
+}
+
+function queryPath(input: unknown): string | undefined {
+  if (input === undefined) return undefined;
+  if (typeof input !== "string") {
+    throw new GitOperationError(400, "Git target path must be a string.");
+  }
+  return input.trim() || undefined;
+}
+
+function bodyPath(body: unknown): string | undefined {
+  if (!body || typeof body !== "object" || !Object.hasOwn(body, "path")) {
+    return undefined;
+  }
+
+  const path = (body as { path?: unknown }).path;
+  if (path === undefined || path === null || path === "") {
+    return undefined;
+  }
+  if (typeof path !== "string") {
+    throw new GitOperationError(400, "Git target path must be a string.");
+  }
+  return path.trim() || undefined;
+}
+
+function requiredString(input: unknown, label: string): string {
+  if (typeof input !== "string") {
+    throw new GitOperationError(400, `${label} must be a string.`);
+  }
+  return input;
+}
+
+function optionalString(input: unknown, label: string): string | undefined {
+  if (input === undefined || input === null || input === "") {
+    return undefined;
+  }
+  if (typeof input !== "string") {
+    throw new GitOperationError(400, `${label} must be a string.`);
+  }
+  return input.trim() || undefined;
 }
 
 function buildDashboardResponse(projects: ProjectSnapshot[]): DashboardResponse {
@@ -955,6 +1254,10 @@ function mapRegistryError(error: unknown): Error {
 
 function describeServiceCount(count: number): string {
   return `${count} service${count === 1 ? "" : "s"}`;
+}
+
+function describeFileCount(count: number): string {
+  return `${count} file${count === 1 ? "" : "s"}`;
 }
 
 function openPath(path: string) {
