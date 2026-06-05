@@ -62,7 +62,7 @@ export function assertFilesReported(files: string[], changes: WorktreeChange[], 
   const reported = new Set(changes.map((change) => change.path));
   const missing = files.filter((file) => !reported.has(file));
   if (missing.length > 0) {
-    throw new GitOperationError(400, `${label} file is not in the current Git status: ${missing.join(", ")}.`);
+    throw new GitOperationError(409, `${label} file is not in the current Git status: ${missing.join(", ")}.`);
   }
 }
 

@@ -563,7 +563,20 @@ describe("createApp", () => {
     await request(app)
       .post(`/api/projects/${project.id}/git/stage`)
       .send({ path: repoPath, files: ["not-reported.txt"] })
-      .expect(400);
+      .expect(409);
+  });
+
+  it("rejects malformed git stage payloads as bad requests", async () => {
+    const repoPath = join(tempDir, "repo");
+    await createGitRepo(repoPath);
+    const registry = new ProjectRegistry(join(tempDir, "projects.json"));
+    const app = createApp({
+      activityLog: new ActivityLog(join(tempDir, "activity.json")),
+      registry
+    });
+    const project = await registry.addProject({ name: "Repo", path: repoPath, tags: [] });
+
+    await request(app).post(`/api/projects/${project.id}/git/stage`).send({ path: repoPath }).expect(400);
   });
 
   it("records failed git operations in activity", async () => {
