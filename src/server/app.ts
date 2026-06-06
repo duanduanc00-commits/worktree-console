@@ -35,7 +35,8 @@ import {
   assertCanPush,
   assertCanStash,
   buildGitOperationStatus,
-  parseGitFilesPayload
+  parseGitFilesPayload,
+  resolveGitTargetPath
 } from "./gitOperations";
 import { ActivityLog, type ActivityInput } from "./activity";
 import { ProjectRegistry } from "./registry";
@@ -105,6 +106,7 @@ class HttpError extends Error {
   }
 }
 
+
 export function createApp({
   activityLog = new ActivityLog(join(process.cwd(), "data", "activity-log.json")),
   registry,
@@ -113,7 +115,6 @@ export function createApp({
   staticDir
 }: AppDependencies) {
   const app = express();
-  app.use(express.json());
 
   app.get("/api/health", (_request, response) => {
     response.json({ ok: true });
@@ -238,8 +239,10 @@ export function createApp({
         response.status(400).json({ error: "Unsupported commit range." });
         return;
       }
+      const snapshot = await snapshotProject(project, serviceManager);
+      const targetPath = resolveGitTargetPath(project, snapshot, request.query.path as string | undefined);
       response.json(
-        await readRecentCommits(project.path, {
+        await readRecentCommits(targetPath, {
           limit,
           range: range as "24h" | "7d" | "30d" | "all"
         })

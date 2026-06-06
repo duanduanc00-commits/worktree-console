@@ -278,6 +278,33 @@ h1 {
   color: var(--text);
 }
 
+.target-select {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+}
+
+.target-select span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.target-select select {
+  width: 100%;
+  min-width: 0;
+  min-height: 32px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.84);
+  color: var(--text);
+  padding: 0 8px;
+  font: inherit;
+  font-size: 12px;
+}
+
 .segmented {
   display: inline-grid;
   grid-auto-flow: column;
@@ -1371,6 +1398,10 @@ button.stat {
   margin-bottom: 0;
 }
 
+.git-target-select {
+  margin-top: 10px;
+}
+
 .git-summary-grid {
   display: grid;
   grid-template-columns: minmax(0, 1.25fr) minmax(220px, 0.75fr);
@@ -1380,7 +1411,7 @@ button.stat {
 
 .git-workspace {
   display: grid;
-  grid-template-columns: minmax(190px, 0.8fr) minmax(260px, 1.15fr) minmax(220px, 0.9fr);
+  grid-template-columns: minmax(240px, 0.85fr) minmax(300px, 1.15fr);
   align-items: start;
   min-width: 0;
   gap: 10px;
@@ -1468,8 +1499,7 @@ button.stat {
 .git-file-list {
   display: grid;
   min-width: 0;
-  max-height: min(48dvh, 560px);
-  overflow: auto;
+  overflow: visible;
 }
 
 .git-file-list .empty-state {
@@ -1522,6 +1552,31 @@ button.stat {
   white-space: nowrap;
 }
 
+.git-change-group {
+  display: grid;
+  min-width: 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.git-change-group:last-child {
+  border-bottom: 0;
+}
+
+.git-change-group-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-width: 0;
+  background: rgba(246, 247, 250, 0.72);
+  color: var(--muted);
+  padding: 7px 10px;
+  gap: 8px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
 .git-diff {
   display: grid;
   align-content: start;
@@ -1555,7 +1610,6 @@ button.stat {
 
 .git-commit-form {
   display: grid;
-  border-top: 1px solid var(--border);
   padding: 10px;
   gap: 8px;
 }
@@ -2064,7 +2118,6 @@ button.stat {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .git-file-list,
   .git-diff .diff-preview {
     max-height: 360px;
   }

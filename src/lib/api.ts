@@ -128,11 +128,17 @@ export async function deleteBranch(projectId: string, branch: string): Promise<v
   });
 }
 
-export async function getProjectCommits(projectId: string, options: { limit: number; range: string }): Promise<RecentCommit[]> {
+export async function getProjectCommits(
+  projectId: string,
+  options: { limit: number; path?: string; range: string }
+): Promise<RecentCommit[]> {
   const params = new URLSearchParams({
     limit: String(options.limit),
     range: options.range
   });
+  if (options.path) {
+    params.set("path", options.path);
+  }
   return request<RecentCommit[]>(`/api/projects/${projectId}/commits?${params.toString()}`);
 }
 

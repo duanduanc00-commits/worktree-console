@@ -207,6 +207,7 @@ describe("createApp", () => {
       .expect(204);
   });
 
+
   it("creates service groups and returns group snapshots in the dashboard", async () => {
     const activityLog = new ActivityLog(join(tempDir, "activity.json"));
     const registry = new ProjectRegistry(join(tempDir, "projects.json"));
@@ -548,6 +549,34 @@ describe("createApp", () => {
       }
     });
     expect(normalizePath(response.body.worktreePath)).toBe(normalizePath(repoPath));
+  });
+
+  it("returns recent commits for a registered worktree target", async () => {
+    const repoPath = join(tempDir, "repo");
+    const worktreePath = join(tempDir, "repo-feature");
+    await createGitRepo(repoPath);
+    await writeFileText(repoPath, "README.md", "main\n");
+    await git(repoPath, ["add", "README.md"]);
+    await git(repoPath, ["commit", "-m", "Main commit"]);
+    await git(repoPath, ["branch", "feature/a"]);
+    await git(repoPath, ["worktree", "add", worktreePath, "feature/a"]);
+    await writeFileText(worktreePath, "feature.txt", "feature\n");
+    await git(worktreePath, ["add", "feature.txt"]);
+    await git(worktreePath, ["commit", "-m", "Feature worktree commit"]);
+
+    const registry = new ProjectRegistry(join(tempDir, "projects.json"));
+    const app = createApp({
+      activityLog: new ActivityLog(join(tempDir, "activity.json")),
+      registry
+    });
+    const project = await registry.addProject({ name: "Repo", path: repoPath, tags: [] });
+
+    const response = await request(app)
+      .get(`/api/projects/${project.id}/commits`)
+      .query({ path: worktreePath, limit: 5, range: "all" })
+      .expect(200);
+
+    expect(response.body[0]).toMatchObject({ subject: "Feature worktree commit" });
   });
 
   it("rejects staging files not reported by git status", async () => {

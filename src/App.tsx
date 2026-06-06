@@ -12,6 +12,8 @@ import {
   History,
   LayoutDashboard,
   ListTree,
+  Maximize2,
+  Minimize2,
   Play,
   Plus,
   Pencil,
@@ -150,6 +152,9 @@ const emptyDashboard: DashboardResponse = {
   }
 };
 
+const SIDEBAR_COLUMN_WIDTH = 210;
+const MIN_INSPECTOR_WIDTH = 340;
+
 export function App() {
   const [dashboard, setDashboard] = useState<DashboardResponse>(emptyDashboard);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -168,8 +173,10 @@ export function App() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [inspectorWidth, setInspectorWidth] = useState(640);
+  const [inspectorExpanded, setInspectorExpanded] = useState(false);
   const [confirmAction, setConfirmAction] = useState<ConfirmAction | null>(null);
   const restoreInspectorWidth = useRef<number | null>(null);
+  const restoreExpandedInspectorWidth = useRef<number | null>(null);
   const inspectorManuallyResized = useRef(false);
   const autoRefreshInFlight = useRef(false);
   const dashboardRefresh = useRef<RefreshRequestTracker>({ currentRequestId: 0, inFlight: false });
@@ -354,11 +361,13 @@ export function App() {
   const handleInspectorResizeStart = useCallback((event: PointerEvent<HTMLButtonElement>) => {
     inspectorManuallyResized.current = true;
     restoreInspectorWidth.current = null;
+    restoreExpandedInspectorWidth.current = null;
+    setInspectorExpanded(false);
     startInspectorResize(event, setInspectorWidth);
   }, []);
 
   const handleChangesFocusChange = useCallback((focused: boolean) => {
-    if (inspectorManuallyResized.current || typeof window === "undefined") return;
+    if (inspectorExpanded || inspectorManuallyResized.current || typeof window === "undefined") return;
 
     if (focused) {
       setInspectorWidth((currentWidth) => {
@@ -376,7 +385,30 @@ export function App() {
       restoreInspectorWidth.current = null;
       return nextWidth;
     });
-  }, []);
+  }, [inspectorExpanded]);
+
+  const handleToggleInspectorExpanded = useCallback(() => {
+    if (typeof window === "undefined") return;
+
+    if (inspectorExpanded) {
+      const restoredWidth = restoreExpandedInspectorWidth.current;
+      restoreExpandedInspectorWidth.current = null;
+      inspectorManuallyResized.current = true;
+      setInspectorExpanded(false);
+      if (restoredWidth !== null) {
+        setInspectorWidth(restoredWidth);
+      }
+      return;
+    }
+
+    setInspectorWidth((currentWidth) => {
+      restoreExpandedInspectorWidth.current = restoreInspectorWidth.current ?? currentWidth;
+      restoreInspectorWidth.current = null;
+      return Math.max(MIN_INSPECTOR_WIDTH, window.innerWidth - SIDEBAR_COLUMN_WIDTH);
+    });
+    inspectorManuallyResized.current = false;
+    setInspectorExpanded(true);
+  }, [inspectorExpanded]);
 
   return (
     <div className="window-shell">
@@ -504,6 +536,7 @@ export function App() {
         </main>
 
         <Inspector
+          expanded={inspectorExpanded}
           project={selectedProject}
           tab={inspectorTab}
           onAddService={(project) => setServiceDialogProject(project)}
@@ -546,6 +579,7 @@ export function App() {
             await refreshAfterOperation();
           }}
           onTabChange={setInspectorTab}
+          onToggleExpanded={handleToggleInspectorExpanded}
         />
       </div>
 
@@ -1011,6 +1045,7 @@ function ProjectList({
 }
 
 function Inspector({
+  expanded,
   onAddService,
   onDeleteBranch,
   onDeleteService,
@@ -1021,9 +1056,11 @@ function Inspector({
   onGitChanged,
   onServiceChanged,
   onTabChange,
+  onToggleExpanded,
   project,
   tab
 }: {
+  expanded: boolean;
   project: ProjectSnapshot | null;
   tab: InspectorTab;
   onAddService: (project: ProjectSnapshot) => void;
@@ -1036,6 +1073,7 @@ function Inspector({
   onGitChanged: (message: string) => Promise<void>;
   onServiceChanged: (message: string) => Promise<void>;
   onTabChange: (tab: InspectorTab) => void;
+  onToggleExpanded: () => void;
 }) {
   const [selectedWorktreePath, setSelectedWorktreePath] = useState<string | null>(null);
 
@@ -1081,6 +1119,15 @@ function Inspector({
               onClick={() => onEditProject(project)}
             >
               <Pencil size={14} />
+            </Button>
+            <Button
+              aria-label={expanded ? "Restore project details width" : "Expand project details"}
+              size="icon"
+              title={expanded ? "Restore project details width" : "Expand project details"}
+              variant="ghost"
+              onClick={onToggleExpanded}
+            >
+              {expanded ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
             </Button>
           </div>
           <p className="mono">{project.path}</p>
@@ -1505,18 +1552,49 @@ function BranchPanel({
   );
 }
 
+function gitTargetOptions(project: ProjectSnapshot) {
+  return [
+    {
+      label: `Main checkout${project.branch?.branch ? ` - ${project.branch.branch}` : ""}`,
+      path: project.path
+    },
+    ...project.worktrees
+      .filter((worktree) => !sameGitPath(worktree.path, project.path))
+      .map((worktree) => ({
+        label: `${worktree.branch ?? "detached"} - ${worktree.path}`,
+        path: worktree.path
+      }))
+  ];
+}
+
+function gitTargetSummary(project: ProjectSnapshot, targetPath: string) {
+  if (sameGitPath(project.path, targetPath)) {
+    return project.branch?.branch ? `main checkout - ${project.branch.branch}` : "main checkout";
+  }
+  const worktree = project.worktrees.find((candidate) => sameGitPath(candidate.path, targetPath));
+  if (!worktree) return targetPath;
+  return worktree.branch ? `worktree - ${worktree.branch}` : "worktree - detached";
+}
+
 function CommitPanel({ project }: { project: ProjectSnapshot }) {
   const [limit, setLimit] = useState(5);
   const [range, setRange] = useState<CommitRange>("all");
+  const [targetPath, setTargetPath] = useState(project.path);
   const [commits, setCommits] = useState<RecentCommit[]>(project.recentCommits);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const targetOptions = gitTargetOptions(project);
+
+  useEffect(() => {
+    setTargetPath(project.path);
+    setCommits(project.recentCommits);
+  }, [project.id, project.path, project.recentCommits]);
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
     setError(null);
-    void getProjectCommits(project.id, { limit, range })
+    void getProjectCommits(project.id, { limit, path: targetPath, range })
       .then((nextCommits) => {
         if (!cancelled) setCommits(nextCommits);
       })
@@ -1530,15 +1608,29 @@ function CommitPanel({ project }: { project: ProjectSnapshot }) {
     return () => {
       cancelled = true;
     };
-  }, [project.id, limit, range]);
+  }, [project.id, limit, range, targetPath]);
 
   return (
     <section className="section">
       <div className="commit-heading">
         <h3>Recent Commits</h3>
-        <span className="mono">main worktree</span>
+        <span className="mono">{gitTargetSummary(project, targetPath)}</span>
       </div>
       <div className="commit-controls">
+        <label className="target-select">
+          <span>Commit target</span>
+          <select
+            aria-label="Commit target"
+            value={targetPath}
+            onChange={(event) => setTargetPath(event.target.value)}
+          >
+            {targetOptions.map((option) => (
+              <option key={option.path} value={option.path}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </label>
         <SegmentedControl>
           {([5, 20, 50] as const).map((count) => (
             <SegmentButton key={count} active={limit === count} onClick={() => setLimit(count)}>
@@ -1589,6 +1681,7 @@ function GitPanel({
   const mutationRequestId = useRef(0);
   const statusRef = useRef<GitOperationStatus | null>(null);
   const [status, setStatus] = useState<GitOperationStatus | null>(null);
+  const [targetPath, setTargetPath] = useState(project.path);
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
   const [diff, setDiff] = useState<WorktreeDiffResponse | null>(null);
   const [message, setMessage] = useState("");
@@ -1597,13 +1690,20 @@ function GitPanel({
   const [busyAction, setBusyAction] = useState<GitPanelAction | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [diffError, setDiffError] = useState<string | null>(null);
+  const targetOptions = gitTargetOptions(project);
 
   useEffect(() => {
-    const targetPath = project.path;
+    setTargetPath(project.path);
+  }, [project.id, project.path]);
+
+  useEffect(() => {
+    const requestedTargetPath = targetOptions.some((option) => sameGitPath(option.path, targetPath))
+      ? targetPath
+      : project.path;
     const nextScope = {
       generation: requestScope.current.generation + 1,
       projectId: project.id,
-      projectPath: targetPath
+      projectPath: requestedTargetPath
     };
     const requestId = statusRequestId.current + 1;
     requestScope.current = nextScope;
@@ -1617,7 +1717,7 @@ function GitPanel({
     setMessage("");
     setError(null);
 
-    void getGitStatus(project.id, targetPath)
+    void getGitStatus(project.id, requestedTargetPath)
       .then((nextStatus) => {
         if (!isCurrentStatusRequest(nextScope, requestId, nextStatus)) return;
         setCurrentStatus(nextStatus);
@@ -1637,7 +1737,7 @@ function GitPanel({
       diffRequestId.current += 1;
       mutationRequestId.current += 1;
     };
-  }, [project.id, project.path]);
+  }, [project.id, project.path, targetPath]);
 
   useEffect(() => {
     if (!status || !selectedFile || gitStatusHasFile(status, selectedFile)) return;
@@ -1876,6 +1976,21 @@ function GitPanel({
         ) : null}
       </div>
 
+      <label className="target-select git-target-select">
+        <span>Git target</span>
+        <select
+          aria-label="Git target"
+          value={targetPath}
+          onChange={(event) => setTargetPath(event.target.value)}
+        >
+          {targetOptions.map((option) => (
+            <option key={option.path} value={option.path}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+      </label>
+
       <div className="git-summary-grid">
         <div className="git-card">
           <div className="git-card-heading">
@@ -1944,14 +2059,57 @@ function GitPanel({
 
       {status ? (
         <div className="git-workspace">
-          <div className="git-column">
+          <div className="git-column git-changes-column">
             <div className="git-column-heading">
-              <h4>Unstaged</h4>
-              <Badge tone={status.changes.unstaged.length === 0 ? "clean" : "dirty"}>
-                {status.changes.unstaged.length}
-              </Badge>
+              <h4>Changed files</h4>
+              <Badge tone={totalChanges === 0 ? "clean" : "dirty"}>{totalChanges}</Badge>
             </div>
-            <div className="git-file-list">{renderChangeRows(status.changes.unstaged, "stage")}</div>
+            <div className="git-change-group">
+              <div className="git-change-group-heading">
+                <span>Unstaged</span>
+                <Badge tone={status.changes.unstaged.length === 0 ? "clean" : "dirty"}>
+                  {status.changes.unstaged.length}
+                </Badge>
+              </div>
+              <div className="git-file-list">{renderChangeRows(status.changes.unstaged, "stage")}</div>
+            </div>
+            <div className="git-change-group">
+              <div className="git-change-group-heading">
+                <span>Staged</span>
+                <Badge tone={status.changes.staged.length === 0 ? "neutral" : "dirty"}>
+                  {status.changes.staged.length}
+                </Badge>
+              </div>
+              <div className="git-file-list">{renderChangeRows(status.changes.staged, "unstage")}</div>
+            </div>
+            <div className="git-commit-section">
+              <div className="git-column-heading">
+                <h4>Commit</h4>
+                <Badge tone={status.changes.staged.length === 0 ? "neutral" : "dirty"}>
+                  {status.changes.staged.length} staged
+                </Badge>
+              </div>
+              <form className="git-commit-form" onSubmit={(event) => void commitChanges(event)}>
+                <label>
+                  <span>Commit message</span>
+                  <textarea
+                    placeholder="Describe the staged change"
+                    rows={4}
+                    value={message}
+                    onChange={(event) => setMessage(event.target.value)}
+                  />
+                </label>
+                <Button
+                  disabled={Boolean(commitReason) || Boolean(busyAction)}
+                  title={commitReason ?? "Commit staged files"}
+                  type="submit"
+                  variant="primary"
+                >
+                  <Check size={14} />
+                  {busyAction === "commit" ? "Committing..." : "Commit"}
+                </Button>
+              </form>
+            </div>
           </div>
 
           <div className="git-diff">
@@ -1978,35 +2136,6 @@ function GitPanel({
             )}
           </div>
 
-          <div className="git-column">
-            <div className="git-column-heading">
-              <h4>Staged</h4>
-              <Badge tone={status.changes.staged.length === 0 ? "neutral" : "dirty"}>
-                {status.changes.staged.length}
-              </Badge>
-            </div>
-            <div className="git-file-list">{renderChangeRows(status.changes.staged, "unstage")}</div>
-            <form className="git-commit-form" onSubmit={(event) => void commitChanges(event)}>
-              <label>
-                <span>Commit message</span>
-                <textarea
-                  placeholder="Describe the staged change"
-                  rows={4}
-                  value={message}
-                  onChange={(event) => setMessage(event.target.value)}
-                />
-              </label>
-              <Button
-                disabled={Boolean(commitReason) || Boolean(busyAction)}
-                title={commitReason ?? "Commit staged files"}
-                type="submit"
-                variant="primary"
-              >
-                <Check size={14} />
-                {busyAction === "commit" ? "Committing..." : "Commit"}
-              </Button>
-            </form>
-          </div>
         </div>
       ) : null}
     </section>

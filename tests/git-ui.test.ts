@@ -12,7 +12,13 @@ import {
   gitSyncDisabledReason,
   shortGitActionLabel
 } from "../src/lib/git-ui";
-import type { DashboardResponse, GitOperationStatus, ProjectSnapshot, WorktreeDiffResponse } from "../src/shared/types";
+import type {
+  DashboardResponse,
+  GitOperationStatus,
+  ProjectSnapshot,
+  RecentCommit,
+  WorktreeDiffResponse
+} from "../src/shared/types";
 
 afterEach(() => {
   cleanup();
@@ -185,6 +191,118 @@ describe("git-ui helpers", () => {
     });
   });
 
+  it("switches the commits tab between the main checkout and worktrees", async () => {
+    const project = projectFixture({
+      recentCommits: [commitFixture({ hash: "main1", subject: "Main commit" })],
+      worktrees: [
+        {
+          path: "E:/repo/console/.worktrees/feature-a",
+          head: "abc123",
+          shortHead: "abc123",
+          branch: "feature/a",
+          detached: false,
+          clean: true,
+          dirtyFiles: 0,
+          changes: []
+        }
+      ]
+    });
+    const requestedUrls: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        requestedUrls.push(url);
+        if (url === "/api/projects") {
+          return jsonResponse(dashboardFixture([project]));
+        }
+        if (url.includes("path=E%3A%2Frepo%2Fconsole%2F.worktrees%2Ffeature-a")) {
+          return jsonResponse([commitFixture({ hash: "feat1", subject: "Feature commit" })]);
+        }
+        if (url.startsWith("/api/projects/project-1/commits")) {
+          return jsonResponse([commitFixture({ hash: "main2", subject: "Main refreshed commit" })]);
+        }
+
+        return jsonResponse({ error: `Unexpected request: ${url}` }, 500);
+      })
+    );
+
+    render(createElement(App));
+
+    fireEvent.click(await screen.findByRole("button", { name: "Commits" }));
+    await screen.findByText("Main refreshed commit");
+
+    fireEvent.change(screen.getByLabelText("Commit target"), {
+      target: { value: "E:/repo/console/.worktrees/feature-a" }
+    });
+
+    await screen.findByText("Feature commit");
+    expect(requestedUrls.some((url) => url.includes("path=E%3A%2Frepo%2Fconsole%2F.worktrees%2Ffeature-a"))).toBe(
+      true
+    );
+  });
+
+  it("does not list the main checkout twice in git target selectors", async () => {
+    const project = projectFixture({
+      worktrees: [
+        {
+          path: "E:/repo/console",
+          head: "abc123",
+          shortHead: "abc123",
+          branch: "main",
+          detached: false,
+          clean: true,
+          dirtyFiles: 0,
+          changes: []
+        },
+        {
+          path: "E:/repo/console/.worktrees/feature-a",
+          head: "def456",
+          shortHead: "def456",
+          branch: "feature/a",
+          detached: false,
+          clean: true,
+          dirtyFiles: 0,
+          changes: []
+        }
+      ]
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url === "/api/projects") {
+          return jsonResponse(dashboardFixture([project]));
+        }
+        if (url.startsWith("/api/projects/project-1/git/status")) {
+          return jsonResponse(gitStatusFixture());
+        }
+        if (url.startsWith("/api/projects/project-1/commits")) {
+          return jsonResponse([commitFixture()]);
+        }
+
+        return jsonResponse({ error: `Unexpected request: ${url}` }, 500);
+      })
+    );
+
+    render(createElement(App));
+
+    fireEvent.click(await screen.findByRole("button", { name: "Git" }));
+    await screen.findByLabelText("Git target");
+
+    expect(Array.from((screen.getByLabelText("Git target") as HTMLSelectElement).options).map((option) => option.value)).toEqual([
+      "E:/repo/console",
+      "E:/repo/console/.worktrees/feature-a"
+    ]);
+
+    fireEvent.click(screen.getByRole("button", { name: "Commits" }));
+    await screen.findByLabelText("Commit target");
+
+    expect(
+      Array.from((screen.getByLabelText("Commit target") as HTMLSelectElement).options).map((option) => option.value)
+    ).toEqual(["E:/repo/console", "E:/repo/console/.worktrees/feature-a"]);
+  });
+
   it("clears a selected diff after staging that file", async () => {
     const status = gitStatusFixture({
       changes: {
@@ -236,6 +354,218 @@ describe("git-ui helpers", () => {
       expect(gitPanelText(container)).toContain("Select a file to preview its diff.");
       expect(gitPanelText(container)).not.toContain("old stale diff marker");
       expect(screen.queryByLabelText("Diff preview for src/App.tsx")).toBeNull();
+    });
+  });
+
+  it("switches Git operations between the main checkout and project worktrees", async () => {
+    const project = projectFixture({
+      worktrees: [
+        {
+          path: "E:/repo/console/.worktrees/feature-a",
+          head: "abc123",
+          shortHead: "abc123",
+          branch: "feature/a",
+          detached: false,
+          clean: false,
+          dirtyFiles: 1,
+          changes: []
+        }
+      ]
+    });
+    const mainStatus = gitStatusFixture({
+      worktreePath: project.path,
+      branch: "main",
+      changes: { unstaged: [], staged: [] }
+    });
+    const featureStatus = gitStatusFixture({
+      worktreePath: "E:/repo/console/.worktrees/feature-a",
+      branch: "feature/a",
+      upstream: "origin/feature/a",
+      changes: {
+        unstaged: [{ code: "M", path: "src/feature.ts", raw: " M src/feature.ts" }],
+        staged: []
+      }
+    });
+    const requestedUrls: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        requestedUrls.push(url);
+        if (url === "/api/projects") {
+          return jsonResponse(dashboardFixture([project]));
+        }
+        if (url.includes("path=E%3A%2Frepo%2Fconsole%2F.worktrees%2Ffeature-a")) {
+          return jsonResponse(featureStatus);
+        }
+        if (url.includes("path=E%3A%2Frepo%2Fconsole")) {
+          return jsonResponse(mainStatus);
+        }
+
+        return jsonResponse({ error: `Unexpected request: ${url}` }, 500);
+      })
+    );
+
+    const { container } = render(createElement(App));
+
+    fireEvent.click(await screen.findByRole("button", { name: "Git" }));
+    await waitFor(() => expect(gitPanelText(container)).toContain("main"));
+
+    fireEvent.change(screen.getByLabelText("Git target"), {
+      target: { value: "E:/repo/console/.worktrees/feature-a" }
+    });
+
+    await waitFor(() => {
+      expect(gitPanelText(container)).toContain("feature/a");
+      expect(gitPanelText(container)).toContain("src/feature.ts");
+    });
+    expect(requestedUrls.some((url) => url.includes("path=E%3A%2Frepo%2Fconsole%2F.worktrees%2Ffeature-a"))).toBe(
+      true
+    );
+  });
+
+  it("renders staged and unstaged files in one changed-files column", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url === "/api/projects") {
+          return jsonResponse(dashboardFixture());
+        }
+        if (url.startsWith("/api/projects/project-1/git/status")) {
+          return jsonResponse(
+            gitStatusFixture({
+              changes: {
+                unstaged: [{ code: "M", path: "src/unstaged.ts", raw: " M src/unstaged.ts" }],
+                staged: [{ code: "A", path: "src/staged.ts", raw: "A  src/staged.ts" }]
+              }
+            })
+          );
+        }
+
+        return jsonResponse({ error: `Unexpected request: ${url}` }, 500);
+      })
+    );
+
+    const { container } = render(createElement(App));
+
+    fireEvent.click(await screen.findByRole("button", { name: "Git" }));
+
+    await waitFor(() => {
+      const workspace = container.querySelector(".git-workspace");
+      expect(workspace?.querySelectorAll(".git-changes-column")).toHaveLength(1);
+      expect(workspace?.querySelectorAll(".git-commit-column")).toHaveLength(0);
+      expect(workspace?.children).toHaveLength(2);
+      expect(gitPanelText(container)).toContain("Changed files");
+      expect(gitPanelText(container)).toContain("Unstaged");
+      expect(gitPanelText(container)).toContain("Staged");
+      expect(gitPanelText(container)).toContain("src/unstaged.ts");
+      expect(gitPanelText(container)).toContain("src/staged.ts");
+    });
+  });
+
+  it("places the commit form below the staged group", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url === "/api/projects") {
+          return jsonResponse(dashboardFixture());
+        }
+        if (url.startsWith("/api/projects/project-1/git/status")) {
+          return jsonResponse(
+            gitStatusFixture({
+              changes: {
+                unstaged: [],
+                staged: [{ code: "A", path: "src/staged.ts", raw: "A  src/staged.ts" }]
+              }
+            })
+          );
+        }
+
+        return jsonResponse({ error: `Unexpected request: ${url}` }, 500);
+      })
+    );
+
+    const { container } = render(createElement(App));
+
+    fireEvent.click(await screen.findByRole("button", { name: "Git" }));
+
+    await waitFor(() => {
+      const changesColumn = container.querySelector(".git-changes-column");
+      const groups = changesColumn?.querySelectorAll(".git-change-group");
+      const commitForm = changesColumn?.querySelector(".git-commit-form");
+      expect(groups).toHaveLength(2);
+      expect(commitForm).not.toBeNull();
+      expect(groups?.[1]?.compareDocumentPosition(commitForm as Element) ?? 0).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    });
+  });
+
+  it("can expand project detail to the project page left edge", async () => {
+    Object.defineProperty(window, "innerWidth", {
+      configurable: true,
+      value: 1600
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        if (String(input) === "/api/projects") {
+          return jsonResponse(dashboardFixture());
+        }
+
+        return jsonResponse({ error: `Unexpected request: ${String(input)}` }, 500);
+      })
+    );
+
+    const { container } = render(createElement(App));
+
+    await screen.findByRole("heading", { name: "Console" });
+    fireEvent.click(screen.getByRole("button", { name: "Expand project details" }));
+
+    await waitFor(() => {
+      expect((container.querySelector(".app-body") as HTMLElement).style.getPropertyValue("--inspector-width")).toBe(
+        "1390px"
+      );
+    });
+    expect(screen.getByRole("button", { name: "Restore project details width" })).not.toBeNull();
+  });
+
+  it("restores the project detail width after expanding from an auto-widened tab", async () => {
+    Object.defineProperty(window, "innerWidth", {
+      configurable: true,
+      value: 1600
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url === "/api/projects") {
+          return jsonResponse(dashboardFixture());
+        }
+        if (url.startsWith("/api/projects/project-1/git/status")) {
+          return jsonResponse(gitStatusFixture());
+        }
+
+        return jsonResponse({ error: `Unexpected request: ${url}` }, 500);
+      })
+    );
+
+    const { container } = render(createElement(App));
+    const appBody = container.querySelector(".app-body") as HTMLElement;
+
+    fireEvent.click(await screen.findByRole("button", { name: "Git" }));
+    await waitFor(() => {
+      expect(appBody.style.getPropertyValue("--inspector-width")).toBe("928px");
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Expand project details" }));
+    await waitFor(() => {
+      expect(appBody.style.getPropertyValue("--inspector-width")).toBe("1390px");
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Restore project details width" }));
+    await waitFor(() => {
+      expect(appBody.style.getPropertyValue("--inspector-width")).toBe("640px");
     });
   });
 });
@@ -323,6 +653,16 @@ function diffFixture(overrides: Partial<WorktreeDiffResponse> = {}): WorktreeDif
     diff: "diff --git a/src/App.tsx b/src/App.tsx\n@@ -1 +1 @@\n-old\n+new",
     truncated: false,
     lineCount: 4,
+    ...overrides
+  };
+}
+
+function commitFixture(overrides: Partial<RecentCommit> = {}): RecentCommit {
+  return {
+    hash: "abc1234",
+    subject: "Commit subject",
+    author: "Ada",
+    relativeTime: "1 minute ago",
     ...overrides
   };
 }
