@@ -288,11 +288,11 @@ describe("git-ui helpers", () => {
     render(createElement(App));
 
     fireEvent.click(await screen.findByRole("button", { name: "Git" }));
-    await screen.findByLabelText("Git target");
+    fireEvent.click(await screen.findByLabelText("Git target"));
 
-    expect(Array.from((screen.getByLabelText("Git target") as HTMLSelectElement).options).map((option) => option.value)).toEqual([
-      "E:/repo/console",
-      "E:/repo/console/.worktrees/feature-a"
+    expect(screen.getAllByRole("option").map((option) => option.textContent)).toEqual([
+      "Main checkout - mainE:/repo/console",
+      "feature/a - E:/repo/console/.worktrees/feature-aE:/repo/console/.worktrees/feature-a"
     ]);
 
     fireEvent.click(screen.getByRole("button", { name: "Commits" }));
@@ -301,6 +301,84 @@ describe("git-ui helpers", () => {
     expect(
       Array.from((screen.getByLabelText("Commit target") as HTMLSelectElement).options).map((option) => option.value)
     ).toEqual(["E:/repo/console", "E:/repo/console/.worktrees/feature-a"]);
+  });
+
+  it("filters Git target options with search before switching targets", async () => {
+    const featurePath = "E:/repo/console/.worktrees/feature-a";
+    const schedulePath = "E:/repo/console/.worktrees/schedule-fix";
+    const project = projectFixture({
+      worktrees: [
+        {
+          path: featurePath,
+          head: "def456",
+          shortHead: "def456",
+          branch: "feature/a",
+          detached: false,
+          clean: false,
+          dirtyFiles: 1,
+          changes: []
+        },
+        {
+          path: schedulePath,
+          head: "fed321",
+          shortHead: "fed321",
+          branch: "codex/schedule-fix",
+          detached: false,
+          clean: true,
+          dirtyFiles: 0,
+          changes: []
+        }
+      ]
+    });
+    const requestedUrls: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        requestedUrls.push(url);
+        if (url === "/api/projects") {
+          return jsonResponse(dashboardFixture([project]));
+        }
+        if (url.includes("path=E%3A%2Frepo%2Fconsole%2F.worktrees%2Ffeature-a")) {
+          return jsonResponse(
+            gitStatusFixture({
+              worktreePath: featurePath,
+              branch: "feature/a",
+              changes: {
+                unstaged: [{ code: "M", path: "src/feature.ts", raw: " M src/feature.ts" }],
+                staged: []
+              }
+            })
+          );
+        }
+        if (url.startsWith("/api/projects/project-1/git/status")) {
+          return jsonResponse(gitStatusFixture());
+        }
+
+        return jsonResponse({ error: `Unexpected request: ${url}` }, 500);
+      })
+    );
+
+    const { container } = render(createElement(App));
+
+    fireEvent.click(await screen.findByRole("button", { name: "Git" }));
+    fireEvent.click(await screen.findByLabelText("Git target"));
+    const searchInput = await screen.findByLabelText("Search Git target");
+
+    fireEvent.change(searchInput, { target: { value: "feature/a" } });
+
+    expect(screen.getByRole("option", { name: /feature\/a/ })).toBeTruthy();
+    expect(screen.queryByRole("option", { name: /schedule-fix/ })).toBeNull();
+
+    fireEvent.click(screen.getByRole("option", { name: /feature\/a/ }));
+
+    await waitFor(() => {
+      expect(gitPanelText(container)).toContain("feature/a");
+      expect(gitPanelText(container)).toContain("src/feature.ts");
+    });
+    expect(requestedUrls.some((url) => url.includes("path=E%3A%2Frepo%2Fconsole%2F.worktrees%2Ffeature-a"))).toBe(
+      true
+    );
   });
 
   it("clears a selected diff after staging that file", async () => {
@@ -357,6 +435,44 @@ describe("git-ui helpers", () => {
     });
   });
 
+  it("refreshes git status instead of showing stale worktree diff errors", async () => {
+    const status = gitStatusFixture({
+      changes: {
+        unstaged: [{ code: "M", path: "src/App.tsx", raw: " M src/App.tsx" }],
+        staged: []
+      }
+    });
+    const statusRequests: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url === "/api/projects") {
+          return jsonResponse(dashboardFixture());
+        }
+        if (url.startsWith("/api/projects/project-1/git/status")) {
+          statusRequests.push(url);
+          return jsonResponse(status);
+        }
+        if (url.startsWith("/api/projects/project-1/worktrees/diff")) {
+          return jsonResponse({ error: "Worktree not found." }, 404);
+        }
+
+        return jsonResponse({ error: `Unexpected request: ${url}` }, 500);
+      })
+    );
+
+    const { container } = render(createElement(App));
+
+    fireEvent.click(await screen.findByRole("button", { name: "Git" }));
+    fireEvent.click(await screen.findByText("src/App.tsx"));
+
+    await waitFor(() => expect(statusRequests).toHaveLength(2));
+
+    expect(gitPanelText(container)).toContain("Select a file to preview its diff.");
+    expect(gitPanelText(container)).not.toContain("Worktree not found.");
+  });
+
   it("switches Git operations between the main checkout and project worktrees", async () => {
     const project = projectFixture({
       worktrees: [
@@ -411,9 +527,8 @@ describe("git-ui helpers", () => {
     fireEvent.click(await screen.findByRole("button", { name: "Git" }));
     await waitFor(() => expect(gitPanelText(container)).toContain("main"));
 
-    fireEvent.change(screen.getByLabelText("Git target"), {
-      target: { value: "E:/repo/console/.worktrees/feature-a" }
-    });
+    fireEvent.click(screen.getByLabelText("Git target"));
+    fireEvent.click(screen.getByRole("option", { name: /feature\/a/ }));
 
     await waitFor(() => {
       expect(gitPanelText(container)).toContain("feature/a");

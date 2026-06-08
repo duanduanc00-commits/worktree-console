@@ -4,6 +4,7 @@ import {
   Archive,
   ArrowLeft,
   Check,
+  ChevronDown,
   Copy,
   Download,
   ExternalLink,
@@ -1588,6 +1589,118 @@ function gitTargetSummary(project: ProjectSnapshot, targetPath: string) {
   return worktree.branch ? `worktree - ${worktree.branch}` : "worktree - detached";
 }
 
+type GitTargetOption = ReturnType<typeof gitTargetOptions>[number];
+
+function GitTargetPicker({
+  className = "",
+  label,
+  onChange,
+  options,
+  value
+}: {
+  className?: string;
+  label: string;
+  onChange: (path: string) => void;
+  options: GitTargetOption[];
+  value: string;
+}) {
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const searchRef = useRef<HTMLInputElement | null>(null);
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const selectedOption = options.find((option) => sameGitPath(option.path, value)) ?? options[0];
+  const normalizedQuery = query.trim().toLowerCase();
+  const filteredOptions = useMemo(
+    () =>
+      normalizedQuery
+        ? options.filter((option) =>
+            `${option.label} ${option.path}`.toLowerCase().includes(normalizedQuery)
+          )
+        : options,
+    [normalizedQuery, options]
+  );
+
+  useEffect(() => {
+    if (!open) return;
+
+    const onPointerDown = (event: globalThis.PointerEvent) => {
+      if (event.target instanceof Node && rootRef.current?.contains(event.target)) return;
+      setOpen(false);
+      setQuery("");
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setOpen(false);
+        setQuery("");
+      }
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    window.setTimeout(() => searchRef.current?.focus(), 0);
+
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [open]);
+
+  function selectOption(path: string) {
+    onChange(path);
+    setOpen(false);
+    setQuery("");
+  }
+
+  return (
+    <div className={`target-select searchable-target-select ${className}`.trim()} ref={rootRef}>
+      <span>{label}</span>
+      <button
+        aria-expanded={open}
+        aria-haspopup="listbox"
+        aria-label={label}
+        className="target-combobox-button"
+        onClick={() => setOpen((current) => !current)}
+        type="button"
+      >
+        <span className="target-combobox-label">{selectedOption?.label ?? "Select target"}</span>
+        <ChevronDown size={14} />
+      </button>
+      {open ? (
+        <div className="target-combobox-popover">
+          <label className="target-combobox-search">
+            <Search size={14} />
+            <input
+              aria-label={`Search ${label}`}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="Search branch or path"
+              ref={searchRef}
+              value={query}
+            />
+          </label>
+          <div aria-label={label} className="target-combobox-options" role="listbox">
+            {filteredOptions.length === 0 ? (
+              <div className="target-combobox-empty">No targets found.</div>
+            ) : (
+              filteredOptions.map((option) => (
+                <button
+                  aria-selected={sameGitPath(option.path, value)}
+                  className="target-combobox-option"
+                  key={option.path}
+                  onClick={() => selectOption(option.path)}
+                  role="option"
+                  type="button"
+                >
+                  <strong>{option.label}</strong>
+                  <span className="mono">{option.path}</span>
+                </button>
+              ))
+            )}
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function CommitPanel({ project }: { project: ProjectSnapshot }) {
   const [limit, setLimit] = useState(5);
   const [range, setRange] = useState<CommitRange>("all");
@@ -1704,18 +1817,14 @@ function GitPanel({
   const [diffError, setDiffError] = useState<string | null>(null);
   const targetOptions = gitTargetOptions(project);
 
-  useEffect(() => {
-    setTargetPath(project.path);
-  }, [project.id, project.path]);
-
-  useEffect(() => {
-    const requestedTargetPath = targetOptions.some((option) => sameGitPath(option.path, targetPath))
-      ? targetPath
+  function refreshGitStatus(requestedTargetPath: string, options: { resetCommitMessage?: boolean } = {}) {
+    const resolvedTargetPath = targetOptions.some((option) => sameGitPath(option.path, requestedTargetPath))
+      ? requestedTargetPath
       : project.path;
     const nextScope = {
       generation: requestScope.current.generation + 1,
       projectId: project.id,
-      projectPath: requestedTargetPath
+      projectPath: resolvedTargetPath
     };
     const requestId = statusRequestId.current + 1;
     requestScope.current = nextScope;
@@ -1726,10 +1835,12 @@ function GitPanel({
     resetDiffState();
     setLoading(true);
     setBusyAction(null);
-    setMessage("");
+    if (options.resetCommitMessage ?? true) {
+      setMessage("");
+    }
     setError(null);
 
-    void getGitStatus(project.id, requestedTargetPath)
+    void getGitStatus(project.id, resolvedTargetPath)
       .then((nextStatus) => {
         if (!isCurrentStatusRequest(nextScope, requestId, nextStatus)) return;
         setCurrentStatus(nextStatus);
@@ -1743,6 +1854,14 @@ function GitPanel({
           setLoading(false);
         }
       });
+  }
+
+  useEffect(() => {
+    setTargetPath(project.path);
+  }, [project.id, project.path]);
+
+  useEffect(() => {
+    refreshGitStatus(targetPath);
 
     return () => {
       statusRequestId.current += 1;
@@ -1787,7 +1906,12 @@ function GitPanel({
       setDiff(nextDiff);
     } catch (caught) {
       if (!isCurrentDiffRequest(scope, requestId, worktreePath)) return;
-      setDiffError((caught as Error).message);
+      const message = (caught as Error).message;
+      if (message === "Worktree not found." || message === "Changed file not found in worktree.") {
+        refreshGitStatus(worktreePath, { resetCommitMessage: false });
+        return;
+      }
+      setDiffError(message);
     } finally {
       if (isCurrentDiffRequest(scope, requestId, worktreePath)) {
         setDiffLoading(false);
@@ -1988,20 +2112,13 @@ function GitPanel({
         ) : null}
       </div>
 
-      <label className="target-select git-target-select">
-        <span>Git target</span>
-        <select
-          aria-label="Git target"
-          value={targetPath}
-          onChange={(event) => setTargetPath(event.target.value)}
-        >
-          {targetOptions.map((option) => (
-            <option key={option.path} value={option.path}>
-              {option.label}
-            </option>
-          ))}
-        </select>
-      </label>
+      <GitTargetPicker
+        className="git-target-select"
+        label="Git target"
+        onChange={setTargetPath}
+        options={targetOptions}
+        value={targetPath}
+      />
 
       <div className="git-summary-grid">
         <div className="git-card">
