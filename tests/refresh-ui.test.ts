@@ -5,6 +5,7 @@ import {
   canStartAutoRefresh,
   finishRefreshRequest,
   isCurrentRefreshRequest,
+  shouldBackOffAutoRefresh,
   startRefreshRequest,
   shouldAutoRefresh,
   shouldShowRefreshLoading
@@ -49,5 +50,18 @@ describe("refresh-ui", () => {
     expect(canStartAutoRefresh({ visibilityState: "hidden", refreshInFlight: false, autoCycleInFlight: false })).toBe(false);
     expect(canStartAutoRefresh({ visibilityState: "visible", refreshInFlight: true, autoCycleInFlight: false })).toBe(false);
     expect(canStartAutoRefresh({ visibilityState: "visible", refreshInFlight: false, autoCycleInFlight: true })).toBe(false);
+  });
+
+  it("skips one automatic refresh cycle after a slow refresh", () => {
+    expect(shouldBackOffAutoRefresh(AUTO_REFRESH_INTERVAL_MS - 1)).toBe(false);
+    expect(shouldBackOffAutoRefresh(AUTO_REFRESH_INTERVAL_MS)).toBe(true);
+    expect(
+      canStartAutoRefresh({
+        visibilityState: "visible",
+        refreshInFlight: false,
+        autoCycleInFlight: false,
+        backoffPending: true
+      })
+    ).toBe(false);
   });
 });

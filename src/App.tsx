@@ -100,6 +100,7 @@ import {
   canStartAutoRefresh,
   finishRefreshRequest,
   isCurrentRefreshRequest,
+  shouldBackOffAutoRefresh,
   startRefreshRequest,
   shouldShowRefreshLoading,
   type RefreshRequestTracker,
@@ -179,6 +180,7 @@ export function App() {
   const restoreExpandedInspectorWidth = useRef<number | null>(null);
   const inspectorManuallyResized = useRef(false);
   const autoRefreshInFlight = useRef(false);
+  const autoRefreshBackoff = useRef(false);
   const dashboardRefresh = useRef<RefreshRequestTracker>({ currentRequestId: 0, inFlight: false });
   const activityRefresh = useRef<RefreshRequestTracker>({ currentRequestId: 0, inFlight: false });
 
@@ -190,7 +192,7 @@ export function App() {
     }
     setError(null);
     try {
-      const nextDashboard = await getDashboard();
+      const nextDashboard = await getDashboard({ allowCache: trigger === "auto" });
       if (isCurrentRefreshRequest(dashboardRefresh.current, requestId)) {
         setDashboard(nextDashboard);
         setSelectedId((current) => current ?? nextDashboard.projects[0]?.id ?? null);
@@ -263,16 +265,25 @@ export function App() {
 
   useEffect(() => {
     const timer = window.setInterval(() => {
+      const readyToRefresh = {
+        autoCycleInFlight: autoRefreshInFlight.current,
+        refreshInFlight: dashboardRefresh.current.inFlight,
+        visibilityState: document.visibilityState
+      };
+
       if (
         !canStartAutoRefresh({
-          autoCycleInFlight: autoRefreshInFlight.current,
-          refreshInFlight: dashboardRefresh.current.inFlight,
-          visibilityState: document.visibilityState
+          ...readyToRefresh,
+          backoffPending: autoRefreshBackoff.current
         })
       ) {
+        if (autoRefreshBackoff.current && canStartAutoRefresh(readyToRefresh)) {
+          autoRefreshBackoff.current = false;
+        }
         return;
       }
 
+      const startedAt = performance.now();
       autoRefreshInFlight.current = true;
       void (async () => {
         try {
@@ -281,6 +292,7 @@ export function App() {
             await refreshActivity("auto");
           }
         } finally {
+          autoRefreshBackoff.current = shouldBackOffAutoRefresh(performance.now() - startedAt);
           autoRefreshInFlight.current = false;
         }
       })();

@@ -44,6 +44,7 @@ import { assessWorktreeRemoval, buildBranchInfo } from "./safety";
 import { ServiceManager } from "./services";
 import { selectFolder as selectLocalFolder } from "./folderPicker";
 import { buildHealthSummary } from "./health";
+import { mapWithConcurrency } from "./concurrency";
 import type {
   ActivityEvent,
   DashboardResponse,
@@ -106,6 +107,8 @@ class HttpError extends Error {
   }
 }
 
+const DASHBOARD_CACHE_TTL_MS = 8_000;
+const DASHBOARD_SNAPSHOT_CONCURRENCY = 4;
 
 export function createApp({
   activityLog = new ActivityLog(join(process.cwd(), "data", "activity-log.json")),
@@ -115,6 +118,44 @@ export function createApp({
   staticDir
 }: AppDependencies) {
   const app = express();
+  let dashboardCache: { expiresAt: number; payload: DashboardResponse } | null = null;
+  let dashboardCacheRequest: Promise<DashboardResponse> | null = null;
+  app.use(express.json());
+
+  async function buildDashboard() {
+    const projects = await registry.listProjects();
+    const snapshots = await mapWithConcurrency(projects, DASHBOARD_SNAPSHOT_CONCURRENCY, (project) =>
+      snapshotProject(project, serviceManager)
+    );
+    const payload = buildDashboardResponse(snapshots);
+    dashboardCache = {
+      expiresAt: Date.now() + DASHBOARD_CACHE_TTL_MS,
+      payload
+    };
+    return payload;
+  }
+
+  async function readDashboard(allowCache: boolean) {
+    const now = Date.now();
+    if (allowCache && dashboardCache && dashboardCache.expiresAt > now) {
+      return dashboardCache.payload;
+    }
+    if (allowCache && dashboardCacheRequest) {
+      return dashboardCacheRequest;
+    }
+
+    const request = buildDashboard().finally(() => {
+      if (dashboardCacheRequest === request) {
+        dashboardCacheRequest = null;
+      }
+    });
+
+    if (allowCache) {
+      dashboardCacheRequest = request;
+    }
+
+    return request;
+  }
 
   app.get("/api/health", (_request, response) => {
     response.json({ ok: true });
@@ -136,11 +177,9 @@ export function createApp({
     }
   });
 
-  app.get("/api/projects", async (_request, response, next) => {
+  app.get("/api/projects", async (request, response, next) => {
     try {
-      const projects = await registry.listProjects();
-      const snapshots = await Promise.all(projects.map((project) => snapshotProject(project, serviceManager)));
-      response.json(buildDashboardResponse(snapshots));
+      response.json(await readDashboard(request.query.cache === "1"));
     } catch (error) {
       next(error);
     }

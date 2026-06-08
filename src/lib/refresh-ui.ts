@@ -1,4 +1,5 @@
 export const AUTO_REFRESH_INTERVAL_MS = 30_000;
+export const AUTO_REFRESH_SLOW_THRESHOLD_MS = AUTO_REFRESH_INTERVAL_MS;
 
 export type RefreshTrigger = "initial" | "manual" | "operation" | "auto";
 
@@ -13,6 +14,13 @@ export function shouldAutoRefresh(visibilityState: string) {
 
 export function shouldShowRefreshLoading(trigger: RefreshTrigger) {
   return trigger !== "auto";
+}
+
+export function shouldBackOffAutoRefresh(
+  durationMs: number,
+  thresholdMs = AUTO_REFRESH_SLOW_THRESHOLD_MS
+) {
+  return Number.isFinite(durationMs) && durationMs >= thresholdMs;
 }
 
 export function startRefreshRequest(tracker: RefreshRequestTracker) {
@@ -35,12 +43,14 @@ export function finishRefreshRequest(tracker: RefreshRequestTracker, requestId: 
 
 export function canStartAutoRefresh({
   autoCycleInFlight,
+  backoffPending = false,
   refreshInFlight,
   visibilityState
 }: {
   autoCycleInFlight: boolean;
+  backoffPending?: boolean;
   refreshInFlight: boolean;
   visibilityState: string;
 }) {
-  return shouldAutoRefresh(visibilityState) && !refreshInFlight && !autoCycleInFlight;
+  return shouldAutoRefresh(visibilityState) && !refreshInFlight && !autoCycleInFlight && !backoffPending;
 }

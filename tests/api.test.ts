@@ -207,6 +207,45 @@ describe("createApp", () => {
       .expect(204);
   });
 
+  it("reuses cached dashboard snapshots only for cache-enabled requests", async () => {
+    const registry = new ProjectRegistry(join(tempDir, "projects.json"));
+    const snapshotCalls: string[] = [];
+    const app = createApp({
+      activityLog: new ActivityLog(join(tempDir, "activity.json")),
+      registry,
+      serviceManager: {
+        snapshot: async (_projectId, service) => {
+          snapshotCalls.push(service.name);
+          return serviceSnapshot(service, "stopped");
+        },
+        start: async () => {
+          throw new Error("not used");
+        },
+        stop: async () => {
+          throw new Error("not used");
+        },
+        restart: async () => {
+          throw new Error("not used");
+        },
+        logs: async () => []
+      }
+    });
+
+    await registerProjectServices(registry);
+
+    await request(app).get("/api/projects?cache=1").expect(200);
+    await request(app).get("/api/projects?cache=1").expect(200);
+
+    expect(snapshotCalls).toEqual(["API", "Worker"]);
+
+    await request(app).get("/api/projects").expect(200);
+
+    expect(snapshotCalls).toEqual(["API", "Worker", "API", "Worker"]);
+
+    await request(app).get("/api/projects?cache=1").expect(200);
+
+    expect(snapshotCalls).toEqual(["API", "Worker", "API", "Worker"]);
+  });
 
   it("creates service groups and returns group snapshots in the dashboard", async () => {
     const activityLog = new ActivityLog(join(tempDir, "activity.json"));

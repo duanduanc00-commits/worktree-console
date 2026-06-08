@@ -50,8 +50,8 @@ export type GitOperationPayloads = {
   stash: GitTargetPayload & { message?: string | null };
 };
 
-export async function getDashboard(): Promise<DashboardResponse> {
-  return request<DashboardResponse>("/api/projects");
+export async function getDashboard(options: { allowCache?: boolean } = {}): Promise<DashboardResponse> {
+  return request<DashboardResponse>(options.allowCache ? "/api/projects?cache=1" : "/api/projects");
 }
 
 export async function getActivity(limit = 100): Promise<ActivityEvent[]> {
