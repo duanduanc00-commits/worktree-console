@@ -26,7 +26,8 @@ import {
   Terminal,
   Trash2,
   Undo2,
-  Upload
+  Upload,
+  WrapText
 } from "lucide-react";
 
 import {
@@ -1472,18 +1473,34 @@ function WorktreeChanges({
 }
 
 function DiffPreview({ diff }: { diff: WorktreeDiffResponse }) {
+  const [wrapLines, setWrapLines] = useState(false);
+
   if (diff.diff.trim().length === 0) {
     return <div className="empty-state compact">No text diff available for this file.</div>;
   }
 
   return (
-    <pre className="diff-preview" aria-label={`Diff preview for ${diff.filePath}`}>
-      {diff.diff.split(/\r?\n/).map((line, index) => (
-        <span className={`diff-line ${diffLineTone(line)}`} key={index}>
-          {line.length === 0 ? " " : line}
-        </span>
-      ))}
-    </pre>
+    <div className="diff-preview-shell">
+      <div className="diff-preview-toolbar">
+        <Button
+          aria-pressed={wrapLines}
+          size="icon"
+          title={wrapLines ? "Disable diff line wrapping" : "Wrap diff lines"}
+          variant={wrapLines ? "primary" : "ghost"}
+          aria-label={wrapLines ? "Disable diff line wrapping" : "Wrap diff lines"}
+          onClick={() => setWrapLines((current) => !current)}
+        >
+          <WrapText size={14} />
+        </Button>
+      </div>
+      <pre className={`diff-preview ${wrapLines ? "wrap-lines" : ""}`} aria-label={`Diff preview for ${diff.filePath}`}>
+        {diff.diff.split(/\r?\n/).map((line, index) => (
+          <span className={`diff-line ${diffLineTone(line)}`} key={index}>
+            {line.length === 0 ? " " : line}
+          </span>
+        ))}
+      </pre>
+    </div>
   );
 }
 
@@ -1587,6 +1604,15 @@ function gitTargetSummary(project: ProjectSnapshot, targetPath: string) {
   const worktree = project.worktrees.find((candidate) => sameGitPath(candidate.path, targetPath));
   if (!worktree) return targetPath;
   return worktree.branch ? `worktree - ${worktree.branch}` : "worktree - detached";
+}
+
+function uniqueGitChanges(changes: WorktreeChange[]) {
+  const seen = new Set<string>();
+  return changes.filter((change) => {
+    if (seen.has(change.path)) return false;
+    seen.add(change.path);
+    return true;
+  });
 }
 
 type GitTargetOption = ReturnType<typeof gitTargetOptions>[number];
@@ -1789,9 +1815,10 @@ function CommitPanel({ project }: { project: ProjectSnapshot }) {
   );
 }
 
-type GitPanelAction = GitSyncAction | "stash" | "stage" | "unstage" | "commit";
+type GitPanelAction = GitSyncAction | "stash" | "stage" | "unstage" | "discard" | "commit";
 type GitPanelScope = { generation: number; projectId: string; projectPath: string };
 type GitMutationRequest = GitPanelScope & { requestId: number; worktreePath: string };
+type GitDiscardTarget = { filePath: string };
 
 function GitPanel({
   onGitChanged,
@@ -1810,6 +1837,11 @@ function GitPanel({
   const [selectedFile, setSelectedFile] = useState<string | null>(null);
   const [diff, setDiff] = useState<WorktreeDiffResponse | null>(null);
   const [message, setMessage] = useState("");
+  const [discardTarget, setDiscardTarget] = useState<GitDiscardTarget | null>(null);
+  const [discardError, setDiscardError] = useState<string | null>(null);
+  const [stashDialogOpen, setStashDialogOpen] = useState(false);
+  const [stashFiles, setStashFiles] = useState<string[]>([]);
+  const [stashError, setStashError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [diffLoading, setDiffLoading] = useState(false);
   const [busyAction, setBusyAction] = useState<GitPanelAction | null>(null);
@@ -1833,6 +1865,11 @@ function GitPanel({
     statusRef.current = null;
     setStatus(null);
     resetDiffState();
+    setDiscardTarget(null);
+    setDiscardError(null);
+    setStashDialogOpen(false);
+    setStashFiles([]);
+    setStashError(null);
     setLoading(true);
     setBusyAction(null);
     if (options.resetCommitMessage ?? true) {
@@ -1939,19 +1976,30 @@ function GitPanel({
     }
   }
 
-  async function stashChanges() {
+  function openStashDialog() {
     if (!status || busyAction) return;
+    const changes = uniqueGitChanges(status.changes.staged.concat(status.changes.unstaged));
+    setStashFiles(changes.map((change) => change.path));
+    setStashError(null);
+    setStashDialogOpen(true);
+  }
+
+  async function stashChanges(filePaths: string[]) {
+    if (!status || busyAction || filePaths.length === 0) return;
 
     const request = startMutationRequest(status.worktreePath);
     setBusyAction("stash");
     setError(null);
+    setStashError(null);
     try {
-      const result = await runGitOperation(project.id, "stash", { path: status.worktreePath });
+      const result = await runGitOperation(project.id, "stash", { path: status.worktreePath, files: filePaths });
       if (!applyMutationStatus(request, result.status)) return;
+      setStashDialogOpen(false);
+      setStashFiles([]);
       await onGitChanged(`Stashed changes for ${project.name}.`);
     } catch (caught) {
       if (!isCurrentMutationRequest(request)) return;
-      setError((caught as Error).message);
+      setStashError((caught as Error).message);
     } finally {
       if (isCurrentMutationRequest(request)) {
         setBusyAction(null);
@@ -1972,6 +2020,28 @@ function GitPanel({
     } catch (caught) {
       if (!isCurrentMutationRequest(request)) return;
       setError((caught as Error).message);
+    } finally {
+      if (isCurrentMutationRequest(request)) {
+        setBusyAction(null);
+      }
+    }
+  }
+
+  async function discardFileChange(filePath: string) {
+    if (!status || busyAction) return;
+
+    const request = startMutationRequest(status.worktreePath);
+    setBusyAction("discard");
+    setError(null);
+    setDiscardError(null);
+    try {
+      const result = await runGitOperation(project.id, "discard", { path: status.worktreePath, files: [filePath] });
+      if (!applyMutationStatus(request, result.status)) return;
+      setDiscardTarget(null);
+      await onGitChanged(`Discarded ${filePath}.`);
+    } catch (caught) {
+      if (!isCurrentMutationRequest(request)) return;
+      setDiscardError((caught as Error).message);
     } finally {
       if (isCurrentMutationRequest(request)) {
         setBusyAction(null);
@@ -2083,14 +2153,28 @@ function GitPanel({
             <span className={`change-code ${changeTone(change.code)}`}>{change.code}</span>
             <span className="mono">{change.path}</span>
           </button>
-          <Button
-            disabled={Boolean(busyAction)}
-            title={actionName === "stage" ? "Move into staged files" : "Move out of staged files"}
-            onClick={() => void runFileAction(actionName, change.path)}
-          >
-            {actionName === "unstage" ? <Undo2 size={13} /> : <Check size={13} />}
-            {shortGitActionLabel(actionName)}
-          </Button>
+          <div className="git-file-actions">
+            <Button
+              disabled={Boolean(busyAction)}
+              title={actionName === "stage" ? "Move into staged files" : "Move out of staged files"}
+              onClick={() => void runFileAction(actionName, change.path)}
+            >
+              {actionName === "unstage" ? <Undo2 size={13} /> : <Check size={13} />}
+              {shortGitActionLabel(actionName)}
+            </Button>
+            <Button
+              disabled={Boolean(busyAction)}
+              title={`Discard local changes in ${change.path}`}
+              variant="danger"
+              onClick={() => {
+                setDiscardError(null);
+                setDiscardTarget({ filePath: change.path });
+              }}
+            >
+              <Trash2 size={13} />
+              Discard
+            </Button>
+          </div>
         </div>
       );
     });
@@ -2102,6 +2186,7 @@ function GitPanel({
     : "Loading git status.";
   const stashReason = !status ? "Loading git status." : status.clean ? "No local changes to stash." : null;
   const syncActions: GitSyncAction[] = ["fetch", "pull", "push"];
+  const stashableChanges = status ? uniqueGitChanges(status.changes.staged.concat(status.changes.unstaged)) : [];
 
   return (
     <section className={gitPanelLayoutClass()}>
@@ -2175,10 +2260,10 @@ function GitPanel({
             <Button
               disabled={Boolean(stashReason) || Boolean(busyAction)}
               title={stashReason ?? "Stash local changes"}
-              onClick={() => void stashChanges()}
+              onClick={() => openStashDialog()}
             >
               <Archive size={14} />
-              Stash changes
+              {busyAction === "stash" ? "Stashing..." : "Stash changes"}
             </Button>
           </div>
         </div>
@@ -2267,7 +2352,177 @@ function GitPanel({
 
         </div>
       ) : null}
+      <ConfirmDiscardDialog
+        busy={busyAction === "discard"}
+        error={discardError}
+        target={discardTarget}
+        worktreePath={status?.worktreePath ?? null}
+        onCancel={() => {
+          if (busyAction === "discard") return;
+          setDiscardTarget(null);
+          setDiscardError(null);
+        }}
+        onConfirm={async () => {
+          if (!discardTarget) return;
+          await discardFileChange(discardTarget.filePath);
+        }}
+      />
+      <ConfirmStashDialog
+        busy={busyAction === "stash"}
+        changes={stashableChanges}
+        error={stashError}
+        open={stashDialogOpen}
+        selectedFiles={stashFiles}
+        worktreePath={status?.worktreePath ?? null}
+        onCancel={() => {
+          if (busyAction === "stash") return;
+          setStashDialogOpen(false);
+          setStashFiles([]);
+          setStashError(null);
+        }}
+        onConfirm={async () => {
+          await stashChanges(stashFiles);
+        }}
+        onSelectedFilesChange={setStashFiles}
+      />
     </section>
+  );
+}
+
+function ConfirmDiscardDialog({
+  busy,
+  error,
+  onCancel,
+  onConfirm,
+  target,
+  worktreePath
+}: {
+  busy: boolean;
+  error: string | null;
+  onCancel: () => void;
+  onConfirm: () => Promise<void>;
+  target: GitDiscardTarget | null;
+  worktreePath: string | null;
+}) {
+  return (
+    <Dialog open={!!target} title="Discard file changes" onOpenChange={(open) => !open && onCancel()}>
+      {target ? (
+        <div className="confirm-body">
+          <p>This will permanently discard the selected local change from the worktree.</p>
+          <div className="confirm-target">
+            <span>File</span>
+            <code>{target.filePath}</code>
+          </div>
+          {worktreePath ? (
+            <div className="confirm-target">
+              <span>Worktree</span>
+              <code>{worktreePath}</code>
+            </div>
+          ) : null}
+          {error ? <div className="error-banner compact">{error}</div> : null}
+          <footer className="dialog-footer">
+            <Button disabled={busy} type="button" variant="ghost" onClick={onCancel}>
+              Cancel
+            </Button>
+            <Button disabled={busy} type="button" variant="danger" onClick={() => void onConfirm()}>
+              {busy ? "Discarding..." : "Confirm Discard"}
+            </Button>
+          </footer>
+        </div>
+      ) : null}
+    </Dialog>
+  );
+}
+
+function ConfirmStashDialog({
+  busy,
+  changes,
+  error,
+  onCancel,
+  onConfirm,
+  onSelectedFilesChange,
+  open,
+  selectedFiles,
+  worktreePath
+}: {
+  busy: boolean;
+  changes: WorktreeChange[];
+  error: string | null;
+  onCancel: () => void;
+  onConfirm: () => Promise<void>;
+  onSelectedFilesChange: (files: string[]) => void;
+  open: boolean;
+  selectedFiles: string[];
+  worktreePath: string | null;
+}) {
+  const selected = new Set(selectedFiles);
+  const allSelected = changes.length > 0 && selectedFiles.length === changes.length;
+
+  function toggleFile(filePath: string) {
+    if (selected.has(filePath)) {
+      onSelectedFilesChange(selectedFiles.filter((candidate) => candidate !== filePath));
+      return;
+    }
+    onSelectedFilesChange([...selectedFiles, filePath]);
+  }
+
+  return (
+    <Dialog open={open} title="Stash selected changes" onOpenChange={(nextOpen) => !nextOpen && onCancel()}>
+      <div className="confirm-body">
+        <p>Select the files to move into a stash. Unselected files will stay in the worktree.</p>
+        {worktreePath ? (
+          <div className="confirm-target">
+            <span>Worktree</span>
+            <code>{worktreePath}</code>
+          </div>
+        ) : null}
+        <div className="stash-file-toolbar">
+          <span>{selectedFiles.length} selected</span>
+          <div>
+            <Button
+              disabled={busy || allSelected}
+              type="button"
+              variant="ghost"
+              onClick={() => onSelectedFilesChange(changes.map((change) => change.path))}
+            >
+              Select all
+            </Button>
+            <Button
+              disabled={busy || selectedFiles.length === 0}
+              type="button"
+              variant="ghost"
+              onClick={() => onSelectedFilesChange([])}
+            >
+              Clear
+            </Button>
+          </div>
+        </div>
+        <div className="stash-file-list">
+          {changes.map((change) => (
+            <label className="stash-file-option" key={change.path}>
+              <input
+                aria-label={change.path}
+                checked={selected.has(change.path)}
+                disabled={busy}
+                type="checkbox"
+                onChange={() => toggleFile(change.path)}
+              />
+              <span className={`change-code ${changeTone(change.code)}`}>{change.code}</span>
+              <span className="mono">{change.path}</span>
+            </label>
+          ))}
+        </div>
+        {error ? <div className="error-banner compact">{error}</div> : null}
+        <footer className="dialog-footer">
+          <Button disabled={busy} type="button" variant="ghost" onClick={onCancel}>
+            Cancel
+          </Button>
+          <Button disabled={busy || selectedFiles.length === 0} type="button" variant="primary" onClick={() => void onConfirm()}>
+            {busy ? "Stashing..." : "Stash selected files"}
+          </Button>
+        </footer>
+      </div>
+    </Dialog>
   );
 }
 

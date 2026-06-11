@@ -34,7 +34,7 @@ export type AddServiceGroupPayload = {
 
 export type UpdateServiceGroupPayload = Partial<AddServiceGroupPayload>;
 
-export type GitOperationAction = "fetch" | "pull" | "push" | "stage" | "unstage" | "commit" | "stash";
+export type GitOperationAction = "fetch" | "pull" | "push" | "stage" | "unstage" | "discard" | "commit" | "stash";
 
 type GitTargetPayload = { path?: string };
 
@@ -46,8 +46,9 @@ export type GitOperationPayloads = {
   push: GitTargetPayload;
   stage: GitFileSelectionPayload;
   unstage: GitFileSelectionPayload;
+  discard: GitFileSelectionPayload;
   commit: GitTargetPayload & { message: string };
-  stash: GitTargetPayload & { message?: string | null };
+  stash: GitTargetPayload & { all?: true; files?: string[]; message?: string | null };
 };
 
 export async function getDashboard(options: { allowCache?: boolean } = {}): Promise<DashboardResponse> {

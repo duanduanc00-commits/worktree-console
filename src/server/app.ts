@@ -11,6 +11,7 @@ import {
   commitStagedFiles,
   createStash,
   deleteBranch,
+  discardFiles,
   fetchRepository,
   pullRepository,
   pushRepository,
@@ -85,7 +86,7 @@ type ServiceController = {
   logs(projectId: string, serviceId: string): Promise<string[]>;
 };
 
-type GitMutationAction = "fetch" | "pull" | "push" | "stage" | "unstage" | "commit" | "stash";
+type GitMutationAction = "fetch" | "pull" | "push" | "stage" | "unstage" | "discard" | "commit" | "stash";
 
 type GitMutationOptions = {
   activityLog: ActivityRecorder;
@@ -650,6 +651,30 @@ export function createApp({
     }
   });
 
+  app.post("/api/projects/:id/git/discard", async (request, response, next) => {
+    try {
+      response.status(202).json(
+        await runGitMutation({
+          activityLog,
+          registry,
+          serviceManager,
+          projectId: request.params.id,
+          body: request.body,
+          action: "discard",
+          label: "Discarded file changes",
+          execute: async (status, body) => {
+            const changes = status.changes.staged.concat(status.changes.unstaged);
+            const files = parseGitFilesPayload(body, changes, "Discard");
+            await discardFiles(status.worktreePath, files, changes);
+            return `Discarded ${describeFileCount(files.length)}`;
+          }
+        })
+      );
+    } catch (error) {
+      next(error);
+    }
+  });
+
   app.post("/api/projects/:id/git/commit", async (request, response, next) => {
     try {
       response.status(202).json(
@@ -687,7 +712,13 @@ export function createApp({
           execute: async (status, body) => {
             assertCanStash(status);
             const message = optionalString((body as { message?: unknown })?.message, "Stash message");
-            await createStash(status.worktreePath, message);
+            const payload = body as { all?: unknown; files?: unknown };
+            const changes = status.changes.staged.concat(status.changes.unstaged);
+            const files =
+              Array.isArray(payload?.files) || payload?.all === true
+                ? parseGitFilesPayload(body, changes, "Stash")
+                : undefined;
+            await createStash(status.worktreePath, message, files);
             return message ? `Stashed ${message}` : `Stashed changes on ${status.branch}`;
           }
         })

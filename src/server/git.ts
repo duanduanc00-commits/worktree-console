@@ -324,15 +324,31 @@ export async function unstageFiles(path: string, filePaths: string[]): Promise<v
   await git(path, ["restore", "--staged", "--", ...filePaths]);
 }
 
+export async function discardFiles(path: string, filePaths: string[], changes: WorktreeChange[]): Promise<void> {
+  const changesByPath = new Map(changes.map((change) => [change.path, change]));
+  const untrackedFiles = filePaths.filter((filePath) => isUntrackedChange(changesByPath.get(filePath)));
+  const trackedFiles = filePaths.filter((filePath) => !untrackedFiles.includes(filePath));
+
+  if (trackedFiles.length > 0) {
+    await git(path, ["restore", "--source=HEAD", "--staged", "--worktree", "--", ...trackedFiles]);
+  }
+  if (untrackedFiles.length > 0) {
+    await git(path, ["clean", "-f", "--", ...untrackedFiles]);
+  }
+}
+
 export async function commitStagedFiles(path: string, message: string): Promise<void> {
   await git(path, ["commit", "-m", message]);
 }
 
-export async function createStash(path: string, message?: string): Promise<void> {
+export async function createStash(path: string, message?: string, filePaths?: string[]): Promise<void> {
   const args = ["stash", "push", "--include-untracked"];
   const trimmedMessage = message?.trim();
   if (trimmedMessage) {
     args.push("-m", trimmedMessage);
+  }
+  if (filePaths?.length) {
+    args.push("--", ...filePaths);
   }
   await git(path, args);
 }
@@ -535,7 +551,7 @@ function hasUnstagedChange(change?: WorktreeChange): boolean {
   return Boolean(change && change.raw.slice(1, 2) !== " " && !isUntrackedChange(change));
 }
 
-function isUntrackedChange(change?: WorktreeChange): boolean {
+export function isUntrackedChange(change?: WorktreeChange): boolean {
   return change?.raw.slice(0, 2) === "??" || change?.code === "??";
 }
 

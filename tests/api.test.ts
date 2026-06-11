@@ -758,6 +758,87 @@ describe("createApp", () => {
     });
   });
 
+  it("stashes only selected files and leaves other changes in the worktree", async () => {
+    const repoPath = join(tempDir, "repo");
+    await createGitRepo(repoPath);
+    await writeFileText(repoPath, "README.md", "selected draft\n");
+    await writeFileText(repoPath, "src/OtherFile.ts", "remaining draft\n");
+    const registry = new ProjectRegistry(join(tempDir, "projects.json"));
+    const app = createApp({
+      activityLog: new ActivityLog(join(tempDir, "activity.json")),
+      registry
+    });
+    const project = await registry.addProject({ name: "Repo", path: repoPath, tags: [] });
+
+    const response = await request(app)
+      .post(`/api/projects/${project.id}/git/stash`)
+      .send({ path: repoPath, files: ["README.md"], message: "Partial stash" })
+      .expect(202);
+
+    expect(response.body).toMatchObject({
+      ok: true,
+      status: {
+        clean: false,
+        changes: {
+          unstaged: [expect.objectContaining({ path: "src/OtherFile.ts" })]
+        },
+        stashes: [expect.objectContaining({ message: expect.stringContaining("Partial stash") })]
+      }
+    });
+    const status = (await git(repoPath, ["status", "--short", "--untracked-files=all"])).stdout;
+    expect(status).not.toContain("README.md");
+    expect(status).toContain("src/OtherFile.ts");
+  });
+
+  it("discards tracked file changes and returns a refreshed clean status", async () => {
+    const repoPath = join(tempDir, "repo");
+    await createGitRepo(repoPath);
+    await writeFileText(repoPath, "README.md", "draft\n");
+    const registry = new ProjectRegistry(join(tempDir, "projects.json"));
+    const app = createApp({
+      activityLog: new ActivityLog(join(tempDir, "activity.json")),
+      registry
+    });
+    const project = await registry.addProject({ name: "Repo", path: repoPath, tags: [] });
+
+    const response = await request(app)
+      .post(`/api/projects/${project.id}/git/discard`)
+      .send({ path: repoPath, files: ["README.md"] })
+      .expect(202);
+
+    expect(response.body).toMatchObject({
+      ok: true,
+      status: {
+        clean: true,
+        changes: {
+          staged: [],
+          unstaged: []
+        }
+      }
+    });
+    expect((await git(repoPath, ["status", "--short"])).stdout.trim()).toBe("");
+  });
+
+  it("discards untracked files by removing them from the worktree", async () => {
+    const repoPath = join(tempDir, "repo");
+    await createGitRepo(repoPath);
+    await writeFileText(repoPath, "src/NewFile.ts", "draft\n");
+    const registry = new ProjectRegistry(join(tempDir, "projects.json"));
+    const app = createApp({
+      activityLog: new ActivityLog(join(tempDir, "activity.json")),
+      registry
+    });
+    const project = await registry.addProject({ name: "Repo", path: repoPath, tags: [] });
+
+    const response = await request(app)
+      .post(`/api/projects/${project.id}/git/discard`)
+      .send({ path: repoPath, files: ["src/NewFile.ts"] })
+      .expect(202);
+
+    expect(response.body.status.clean).toBe(true);
+    expect((await git(repoPath, ["status", "--short", "--untracked-files=all"])).stdout.trim()).toBe("");
+  });
+
   it("allows fetching while the worktree is dirty", async () => {
     const repoPath = join(tempDir, "repo");
     const bareRemotePath = join(tempDir, "origin.git");

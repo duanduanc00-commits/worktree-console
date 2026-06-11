@@ -435,6 +435,161 @@ describe("git-ui helpers", () => {
     });
   });
 
+  it("toggles line wrapping for diff previews", async () => {
+    const status = gitStatusFixture({
+      changes: {
+        unstaged: [{ code: "M", path: "src/App.tsx", raw: " M src/App.tsx" }],
+        staged: []
+      }
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url === "/api/projects") {
+          return jsonResponse(dashboardFixture());
+        }
+        if (url.startsWith("/api/projects/project-1/git/status")) {
+          return jsonResponse(status);
+        }
+        if (url.startsWith("/api/projects/project-1/worktrees/diff")) {
+          return jsonResponse(
+            diffFixture({
+              filePath: "src/App.tsx",
+              diff: "diff --git a/src/App.tsx b/src/App.tsx\n@@ -1 +1 @@\n-const oldValue = 'very-long-line-that-would-normally-scroll';\n+const newValue = 'very-long-line-that-can-wrap-inside-the-diff-panel';"
+            })
+          );
+        }
+
+        return jsonResponse({ error: `Unexpected request: ${url}` }, 500);
+      })
+    );
+
+    render(createElement(App));
+
+    fireEvent.click(await screen.findByRole("button", { name: "Git" }));
+    fireEvent.click(await screen.findByText("src/App.tsx"));
+
+    const preview = await screen.findByLabelText("Diff preview for src/App.tsx");
+    expect(preview.className).not.toContain("wrap-lines");
+
+    fireEvent.click(screen.getByRole("button", { name: "Wrap diff lines" }));
+    expect(preview.className).toContain("wrap-lines");
+
+    fireEvent.click(screen.getByRole("button", { name: "Disable diff line wrapping" }));
+    expect(preview.className).not.toContain("wrap-lines");
+  });
+
+  it("confirms before discarding an individual changed file", async () => {
+    const dirtyStatus = gitStatusFixture({
+      changes: {
+        unstaged: [{ code: "M", path: "src/App.tsx", raw: " M src/App.tsx" }],
+        staged: []
+      }
+    });
+    const cleanStatus = gitStatusFixture({
+      clean: true,
+      changes: {
+        unstaged: [],
+        staged: []
+      }
+    });
+    const discardRequests: RequestInit[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url === "/api/projects") {
+          return jsonResponse(dashboardFixture());
+        }
+        if (url.startsWith("/api/projects/project-1/git/status")) {
+          return jsonResponse(dirtyStatus);
+        }
+        if (url === "/api/projects/project-1/git/discard") {
+          discardRequests.push(init ?? {});
+          return jsonResponse({ ok: true, status: cleanStatus });
+        }
+
+        return jsonResponse({ error: `Unexpected request: ${url}` }, 500);
+      })
+    );
+
+    const { container } = render(createElement(App));
+
+    fireEvent.click(await screen.findByRole("button", { name: "Git" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Discard" }));
+
+    const dialog = screen.getByRole("dialog");
+    expect(dialog.textContent).toContain("src/App.tsx");
+
+    fireEvent.click(screen.getByRole("button", { name: "Confirm Discard" }));
+
+    await waitFor(() => expect(discardRequests).toHaveLength(1));
+    expect(JSON.parse(String(discardRequests[0].body))).toEqual({
+      path: "E:/repo/console",
+      files: ["src/App.tsx"]
+    });
+    expect(gitPanelText(container)).toContain("No unstaged files.");
+  });
+
+  it("confirms stash and sends only selected files", async () => {
+    const dirtyStatus = gitStatusFixture({
+      changes: {
+        unstaged: [
+          { code: "M", path: "src/App.tsx", raw: " M src/App.tsx" },
+          { code: "??", path: "src/keep-local.ts", raw: "?? src/keep-local.ts" }
+        ],
+        staged: []
+      }
+    });
+    const remainingStatus = gitStatusFixture({
+      changes: {
+        unstaged: [{ code: "??", path: "src/keep-local.ts", raw: "?? src/keep-local.ts" }],
+        staged: []
+      }
+    });
+    const stashRequests: RequestInit[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        if (url === "/api/projects") {
+          return jsonResponse(dashboardFixture());
+        }
+        if (url.startsWith("/api/projects/project-1/git/status")) {
+          return jsonResponse(dirtyStatus);
+        }
+        if (url === "/api/projects/project-1/git/stash") {
+          stashRequests.push(init ?? {});
+          return jsonResponse({ ok: true, status: remainingStatus });
+        }
+
+        return jsonResponse({ error: `Unexpected request: ${url}` }, 500);
+      })
+    );
+
+    const { container } = render(createElement(App));
+
+    fireEvent.click(await screen.findByRole("button", { name: "Git" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Stash changes" }));
+
+    const dialog = screen.getByRole("dialog");
+    expect(dialog.textContent).toContain("src/App.tsx");
+    expect(dialog.textContent).toContain("src/keep-local.ts");
+    expect(stashRequests).toHaveLength(0);
+
+    fireEvent.click(screen.getByLabelText("src/keep-local.ts"));
+    fireEvent.click(screen.getByRole("button", { name: "Stash selected files" }));
+
+    await waitFor(() => expect(stashRequests).toHaveLength(1));
+    expect(JSON.parse(String(stashRequests[0].body))).toEqual({
+      path: "E:/repo/console",
+      files: ["src/App.tsx"]
+    });
+    expect(gitPanelText(container)).toContain("src/keep-local.ts");
+    expect(gitPanelText(container)).not.toContain("src/App.tsx");
+  });
+
   it("refreshes git status instead of showing stale worktree diff errors", async () => {
     const status = gitStatusFixture({
       changes: {

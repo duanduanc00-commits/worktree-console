@@ -7,6 +7,7 @@ void runGitOperation(projectId, "stage", { path: "repo", files: ["src/App.tsx"] 
 void runGitOperation(projectId, "stage", { all: true });
 void runGitOperation(projectId, "commit", { path: "repo", message: "Ship it" });
 void runGitOperation(projectId, "stash", { path: "repo", message: null });
+void runGitOperation(projectId, "stash", { path: "repo", files: ["src/App.tsx"] });
 
 // @ts-expect-error Commit operations require a message.
 void runGitOperation(projectId, "commit", { path: "repo" });
