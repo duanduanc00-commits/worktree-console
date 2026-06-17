@@ -93,6 +93,60 @@ describe("git-ui helpers", () => {
     });
   });
 
+  it("does not open worktree changes when the user is selecting worktree text", async () => {
+    const worktreePath = "E:/repo/console/.worktrees/feature-a";
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) => {
+        if (String(input) === "/api/projects") {
+          return jsonResponse(
+            dashboardFixture([
+              projectFixture({
+                worktrees: [
+                  {
+                    path: worktreePath,
+                    head: "abc1234",
+                    branch: "feature/a",
+                    detached: false,
+                    clean: false,
+                    dirtyFiles: 1,
+                    changes: [{ code: "M", path: "src/App.tsx", raw: " M src/App.tsx" }],
+                    removal: { level: "blocked", label: "Has changes", reasons: ["Dirty worktree"], canDelete: false },
+                    baseRefs: ["main"]
+                  }
+                ]
+              })
+            ])
+          );
+        }
+
+        return jsonResponse({ error: `Unexpected request: ${String(input)}` }, 500);
+      })
+    );
+    render(createElement(App));
+
+    const pathText = await screen.findByText(worktreePath);
+    const getSelection = vi.spyOn(window, "getSelection").mockReturnValue({
+      anchorNode: pathText.firstChild,
+      focusNode: pathText.firstChild,
+      isCollapsed: false,
+      toString: () => worktreePath
+    } as Selection);
+
+    fireEvent.click(pathText);
+
+    expect(screen.queryByText("Changes")).toBeNull();
+    expect(screen.getByText(worktreePath)).toBeTruthy();
+
+    getSelection.mockReturnValue({
+      isCollapsed: true,
+      toString: () => ""
+    } as Selection);
+    fireEvent.click(pathText);
+
+    expect(await screen.findByText("Changes")).toBeTruthy();
+  });
+
   it("ignores stale git operation results after switching projects", async () => {
     const alpha = projectFixture({
       id: "alpha",

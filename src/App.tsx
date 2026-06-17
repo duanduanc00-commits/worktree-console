@@ -1230,7 +1230,12 @@ function WorktreePanel({
                 <div
                   className="tree-item tree-button"
                   key={`${worktree.path}-${worktree.head}`}
-                  onClick={() => onSelectedPathChange(worktree.path)}
+                  onClick={(event) => {
+                    if (hasTextSelectionInside(event.currentTarget)) {
+                      return;
+                    }
+                    onSelectedPathChange(worktree.path);
+                  }}
                   onKeyDown={(event) => {
                     if (event.key === "Enter" || event.key === " ") {
                       event.preventDefault();
@@ -3542,6 +3547,30 @@ function formatActivityFullTime(isoTime: string) {
 function action(event: React.MouseEvent, callback: () => void) {
   event.stopPropagation();
   callback();
+}
+
+function hasTextSelectionInside(element: HTMLElement) {
+  const selection = window.getSelection?.();
+  if (!selection || selection.isCollapsed || !selectionHasText(selection)) {
+    return false;
+  }
+
+  const { anchorNode, focusNode } = selection;
+  return Boolean((anchorNode && element.contains(anchorNode)) || (focusNode && element.contains(focusNode)));
+}
+
+function selectionHasText(selection: Selection) {
+  if (selection.toString().trim().length > 0) {
+    return true;
+  }
+
+  for (let index = 0; index < selection.rangeCount; index += 1) {
+    if (selection.getRangeAt(index).toString().trim().length > 0) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 function startInspectorResize(
