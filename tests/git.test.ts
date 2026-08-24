@@ -1,5 +1,5 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 
 import { describe, expect, it } from "vitest";
@@ -14,9 +14,21 @@ import {
   parseBranchTrackingRefs,
   parseBranchStatus,
   parseShortStatusChanges,
+  gitStatusTimeoutMs,
+  resolveGitExecutionContext,
+  resolveGitPath,
+  shouldRetryStatusWithoutUntrackedOnTimeout,
   splitGitOperationChanges,
   parseWorktreeList
 } from "../src/server/git";
+
+function restoreEnv(name: string, value: string | undefined) {
+  if (value === undefined) {
+    delete process.env[name];
+  } else {
+    process.env[name] = value;
+  }
+}
 
 describe("parseBranchStatus", () => {
   it("parses the current branch, upstream, ahead/behind counts, and dirty file count", () => {
@@ -121,6 +133,59 @@ describe("parseWorktreeList", () => {
         detached: false
       }
     ]);
+  });
+});
+
+describe("resolveGitExecutionContext", () => {
+  it("normalizes slash direction for Git paths", () => {
+    expect(resolveGitPath("nested\\repo", "C:/base").replace(/\\/g, "/")).toContain("C:/base/nested/repo");
+  });
+
+  it("uses GIT_DIR and GIT_WORK_TREE for file-based worktree gitdirs", async () => {
+      const tempDir = await mkdtemp(join(tmpdir(), "worktree-console-gitdir-"));
+    try {
+      const worktreePath = join(tempDir, "feature");
+      await writeFile(join(tempDir, "placeholder"), "");
+      await mkdir(worktreePath, { recursive: true });
+      await writeFile(join(worktreePath, ".git"), "gitdir: ../repo.git/worktrees/feature\n");
+
+      const context = await resolveGitExecutionContext(worktreePath);
+
+      expect(context.cwd).toBe(resolve(worktreePath));
+      expect(context.env).toMatchObject({
+        GIT_DIR: resolve(worktreePath, "../repo.git/worktrees/feature"),
+        GIT_WORK_TREE: resolve(worktreePath)
+      });
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("Git status timeout settings", () => {
+  it("uses a dedicated status timeout when configured", () => {
+    const originalStatusTimeout = process.env.WORKTREE_CONSOLE_GIT_STATUS_TIMEOUT_MS;
+    const originalGitTimeout = process.env.WORKTREE_CONSOLE_GIT_TIMEOUT_MS;
+    process.env.WORKTREE_CONSOLE_GIT_STATUS_TIMEOUT_MS = "3000";
+    process.env.WORKTREE_CONSOLE_GIT_TIMEOUT_MS = "15000";
+
+    try {
+      expect(gitStatusTimeoutMs()).toBe(3000);
+    } finally {
+      restoreEnv("WORKTREE_CONSOLE_GIT_STATUS_TIMEOUT_MS", originalStatusTimeout);
+      restoreEnv("WORKTREE_CONSOLE_GIT_TIMEOUT_MS", originalGitTimeout);
+    }
+  });
+
+  it("can disable the slower untracked fallback after status timeout", () => {
+    const originalRetry = process.env.WORKTREE_CONSOLE_GIT_STATUS_RETRY_UNTRACKED;
+    process.env.WORKTREE_CONSOLE_GIT_STATUS_RETRY_UNTRACKED = "false";
+
+    try {
+      expect(shouldRetryStatusWithoutUntrackedOnTimeout()).toBe(false);
+    } finally {
+      restoreEnv("WORKTREE_CONSOLE_GIT_STATUS_RETRY_UNTRACKED", originalRetry);
+    }
   });
 });
 

@@ -1,6 +1,6 @@
 import { createReadStream } from "node:fs";
-import { access, lstat, readlink } from "node:fs/promises";
-import { join } from "node:path";
+import { access, lstat, readFile, readlink } from "node:fs/promises";
+import { join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { execFile } from "node:child_process";
 
@@ -17,6 +17,13 @@ const execFileAsync = promisify(execFile);
 const prettyCommitFormat = "--pretty=format:%h%x1f%s%x1f%an%x1f%cr";
 const safeDiffArgs = ["--no-ext-diff", "--no-textconv"];
 const untrackedDiffPreviewChars = 64 * 1024;
+const gitdirPrefix = /^gitdir:\s*(.+)\s*$/i;
+const windowsDrivePath = /^[a-zA-Z]:\//;
+const defaultGitTimeoutMs = 12000;
+
+type GitExecOptions = {
+  timeoutMs?: number;
+};
 
 export type RecentCommitRange = "24h" | "7d" | "30d" | "all";
 
@@ -180,13 +187,35 @@ export async function isGitRepository(path: string): Promise<boolean> {
 }
 
 export async function readBranchStatus(path: string): Promise<BranchStatus> {
-  const { stdout } = await git(path, ["status", "--short", "--branch"]);
-  return parseBranchStatus(stdout);
+  try {
+    const { stdout } = await git(path, ["status", "--short", "--branch"], { timeoutMs: gitStatusTimeoutMs() });
+    return parseBranchStatus(stdout);
+  } catch (error) {
+    if (!isGitTimeoutError(error)) {
+      throw error;
+    }
+    return readLightBranchStatus(path);
+  }
 }
 
 export async function readWorktreeChanges(path: string): Promise<WorktreeChange[]> {
-  const { stdout } = await git(path, ["status", "--short", "--untracked-files=all", "-z"]);
-  return parseShortStatusChanges(stdout);
+  try {
+    const { stdout } = await git(path, ["status", "--short", "--untracked-files=all", "-z"], {
+      timeoutMs: gitStatusTimeoutMs()
+    });
+    return parseShortStatusChanges(stdout);
+  } catch (error) {
+    if (!isGitTimeoutError(error)) {
+      throw error;
+    }
+    if (!shouldRetryStatusWithoutUntrackedOnTimeout()) {
+      throw error;
+    }
+    const { stdout } = await git(path, ["status", "--short", "--untracked-files=no", "-z"], {
+      timeoutMs: gitStatusTimeoutMs()
+    });
+    return parseShortStatusChanges(stdout);
+  }
 }
 
 export function splitGitOperationChanges(changes: WorktreeChange[]): GitOperationChangeGroups {
@@ -322,6 +351,47 @@ export async function stageFiles(path: string, filePaths: string[]): Promise<voi
 
 export async function unstageFiles(path: string, filePaths: string[]): Promise<void> {
   await git(path, ["restore", "--staged", "--", ...filePaths]);
+}
+
+export function resolveGitPath(rawPath: string, baseDir = process.cwd(), processCwd = process.cwd()): string {
+  const normalized = rawPath.trim().replace(/\\/g, "/");
+  if (windowsDrivePath.test(normalized) && process.platform !== "win32") {
+    return resolve(processCwd, normalized);
+  }
+  if (windowsDrivePath.test(normalized)) {
+    return resolve(normalized);
+  }
+  return resolve(baseDir, normalized);
+}
+
+export async function resolveGitExecutionContext(cwd: string): Promise<{
+  cwd: string;
+  env?: NodeJS.ProcessEnv;
+}> {
+  const workTree = resolveGitPath(cwd);
+  const dotGitPath = join(workTree, ".git");
+
+  try {
+    const stats = await lstat(dotGitPath);
+    if (!stats.isFile()) {
+      return { cwd: workTree };
+    }
+
+    const gitdir = gitdirPrefix.exec(await readFile(dotGitPath, "utf8"))?.[1]?.trim();
+    if (!gitdir) {
+      return { cwd: workTree };
+    }
+
+    return {
+      cwd: workTree,
+      env: {
+        GIT_DIR: resolveGitPath(gitdir, workTree),
+        GIT_WORK_TREE: workTree
+      }
+    };
+  } catch {
+    return { cwd: workTree };
+  }
 }
 
 export async function discardFiles(path: string, filePaths: string[], changes: WorktreeChange[]): Promise<void> {
@@ -555,6 +625,45 @@ export function isUntrackedChange(change?: WorktreeChange): boolean {
   return change?.raw.slice(0, 2) === "??" || change?.code === "??";
 }
 
+async function readLightBranchStatus(path: string): Promise<BranchStatus> {
+  const branch = await readCurrentBranch(path);
+  const upstream = await readUpstreamBranch(path);
+  const [ahead, behind] = upstream ? await readAheadBehind(path, upstream) : [0, 0];
+
+  return {
+    branch,
+    upstream,
+    ahead,
+    behind,
+    dirtyFiles: 0,
+    clean: false
+  };
+}
+
+async function readCurrentBranch(path: string): Promise<string> {
+  const { stdout } = await git(path, ["branch", "--show-current"]);
+  return stdout.trim() || "HEAD";
+}
+
+async function readUpstreamBranch(path: string): Promise<string | null> {
+  try {
+    const { stdout } = await git(path, ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"]);
+    return stdout.trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+async function readAheadBehind(path: string, upstream: string): Promise<[number, number]> {
+  try {
+    const { stdout } = await git(path, ["rev-list", "--left-right", "--count", `${upstream}...HEAD`]);
+    const [behind = "0", ahead = "0"] = stdout.trim().split(/\s+/);
+    return [Number(ahead) || 0, Number(behind) || 0];
+  } catch {
+    return [0, 0];
+  }
+}
+
 async function readBoundedTextLines(
   path: string,
   maxLines: number,
@@ -609,13 +718,36 @@ function isMaxBufferError(error: unknown): boolean {
     (typeof candidate.message === "string" && candidate.message.includes("maxBuffer"));
 }
 
-async function git(cwd: string, args: string[]) {
+async function git(cwd: string, args: string[], options: GitExecOptions = {}) {
+  const context = await resolveGitExecutionContext(cwd);
   return execFileAsync("git", args, {
-    cwd,
+    cwd: context.cwd,
+    env: context.env ? { ...process.env, ...context.env } : process.env,
     windowsHide: true,
-    timeout: 12000,
+    timeout: options.timeoutMs ?? gitTimeoutMs(),
     maxBuffer: 1024 * 1024
   });
+}
+
+function isGitTimeoutError(error: unknown): boolean {
+  const candidate = error as { killed?: unknown; signal?: unknown };
+  return candidate.killed === true || candidate.signal === "SIGTERM";
+}
+
+function gitTimeoutMs() {
+  const timeout = Number(process.env.WORKTREE_CONSOLE_GIT_TIMEOUT_MS);
+  return Number.isInteger(timeout) && timeout > 0 ? timeout : defaultGitTimeoutMs;
+}
+
+export function gitStatusTimeoutMs() {
+  const timeout = Number(process.env.WORKTREE_CONSOLE_GIT_STATUS_TIMEOUT_MS);
+  return Number.isInteger(timeout) && timeout > 0 ? timeout : gitTimeoutMs();
+}
+
+export function shouldRetryStatusWithoutUntrackedOnTimeout() {
+  const value = process.env.WORKTREE_CONSOLE_GIT_STATUS_RETRY_UNTRACKED;
+  if (value === undefined) return true;
+  return !["0", "false", "no"].includes(value.trim().toLowerCase());
 }
 
 function numberFromStatus(status: string, pattern: RegExp): number {
