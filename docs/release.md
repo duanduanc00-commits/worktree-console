@@ -33,8 +33,10 @@ Local package-runtime smoke test from a clone:
 ```powershell
 npm ci
 npm run build
-npm start -- --no-open
+npm start
 ```
+
+The repository `npm start` script uses local workbench defaults: `127.0.0.1:5273`, `data`, and no browser auto-open. Append flags such as `--port`, `--data-dir`, or `--open` after `--` to override them.
 
 Source development run:
 

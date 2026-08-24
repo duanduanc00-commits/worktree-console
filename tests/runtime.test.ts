@@ -43,6 +43,21 @@ describe("runtime configuration", () => {
     expect(config.activityLogPath).toBe("D:/activity/custom.json");
   });
 
+  it("allows a later --open flag to override a default --no-open script argument", () => {
+    const config = resolveRuntimeConfig({
+      argv: ["--host", "127.0.0.1", "--port", "5273", "--data-dir", "data", "--no-open", "--open"],
+      cwd: "E:/worktree-console",
+      env: {},
+      homeDir: "C:/Users/Ada",
+      packageRoot: "E:/worktree-console",
+      platform: "win32"
+    });
+
+    expect(config.openBrowser).toBe(true);
+    expect(config.port).toBe(5273);
+    expect(config.dataDir).toBe("E:/worktree-console/data");
+  });
+
   it("resolves relative runtime paths from the launch directory", () => {
     const config = resolveRuntimeConfig({
       argv: ["--data-dir", ".console-data", "--static-dir", "build-output"],

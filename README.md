@@ -48,10 +48,33 @@ Useful options:
 ```powershell
 npx worktree-console --port 6600
 npx worktree-console --data-dir "C:\Users\you\AppData\Local\Worktree Console"
+npx worktree-console --open
 npx worktree-console --no-open
 ```
 
-From a cloned repository, use source development mode:
+From a cloned repository, run the local Windows workbench with the repo defaults:
+
+```powershell
+npm install
+npm start
+```
+
+The repository `npm start` command uses:
+
+- Host: `127.0.0.1`
+- Port: `5273`
+- Data directory: `data`
+- Browser opening: disabled
+
+Override any default by appending CLI flags:
+
+```powershell
+npm start -- --port 6600
+npm start -- --data-dir "D:\worktree-console-data"
+npm start -- --open
+```
+
+For frontend/API development, use source development mode:
 
 ```powershell
 npm install
@@ -72,7 +95,7 @@ To smoke test the packaged runtime from a clone before npm publication:
 ```powershell
 npm install
 npm run build
-npm start -- --no-open
+npm start
 ```
 
 ## Local Docker

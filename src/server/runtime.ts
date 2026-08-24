@@ -132,6 +132,8 @@ function parseRuntimeFlags(argv: string[]) {
     const arg = argv[index];
     if (arg === "--no-open") {
       flags.openBrowser = false;
+    } else if (arg === "--open") {
+      flags.openBrowser = true;
     } else if (arg === "--port") {
       flags.port = parsePort(argv[index + 1]);
       index += 1;

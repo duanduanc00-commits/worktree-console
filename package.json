@@ -28,7 +28,7 @@
     "dev": "concurrently \"npm:dev:api\" \"npm:dev:web\"",
     "dev:api": "tsx watch src/server/index.ts",
     "dev:web": "vite --host 127.0.0.1",
-    "start": "node bin/worktree-console.js",
+    "start": "node bin/worktree-console.js --host 127.0.0.1 --port 5273 --data-dir data --no-open",
     "build": "tsc --noEmit && vite build",
     "prepack": "npm run build",
     "test": "vitest run",

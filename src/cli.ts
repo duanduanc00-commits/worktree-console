@@ -29,6 +29,7 @@ Options:
   --port <port>        Local port for the single-server console. Defaults to 5273.
   --host <host>        Hostname to bind. Defaults to 127.0.0.1.
   --data-dir <path>    Directory for projects.json and activity-log.json.
+  --open               Open the browser after starting.
   --no-open            Start without opening the browser.
   -h, --help           Show this help.
 `);
