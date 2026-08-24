@@ -18,6 +18,7 @@ The app only tracks projects you register. Runtime data stays local and is ignor
 - Run daily Git operations from a wide project Git tab: fetch, pull, push, stage, unstage, commit, and stash.
 - Choose recent commit count or time range for the main registered project checkout.
 - Register project services and one-shot tasks with local commands, ports, health URLs, and log previews.
+- Automatically show unregistered TCP services launched from a registered project's Git-linked worktrees.
 - Start, stop, restart, and open services from the console, with safer handling for externally started processes.
 - Group related services into a stack, then start, stop, restart, or remove the group while preserving individual service registrations.
 - Review the Activity view for operations such as project changes, service actions, branch deletion, and worktree removal.
@@ -99,11 +100,11 @@ Before contributing, read:
 Security and privacy boundaries:
 
 - The app tracks only projects you register.
-- The app does not scan the whole machine automatically.
+- The app does not scan disks or discover unregistered repositories. Service discovery reads local TCP listeners and process metadata only long enough to match them to worktrees of registered projects; unmatched processes are discarded.
 - The app does not upload registry or activity data.
 - Local runtime data can include private paths, commands, ports, and operation history.
 - Destructive Git actions must stay behind safety checks and confirmation.
-- Service controls may stop external processes only when the backend matches the listening process tree to the registered project path or service working directory.
+- Service controls may stop external processes only when the backend matches the listening process tree to the registered project path, service working directory, or a currently linked worktree.
 
 Pull requests are checked by GitHub Actions with `npm ci`, `npm test`, and `npm run build`.
 
@@ -127,12 +128,14 @@ Services are registered per project with a working directory, command, optional 
 
 Services with ports behave like long-running local apps. Services without ports are shown as tasks and can be run once without showing unavailable stop/restart controls.
 
+On each dashboard refresh, the console also inspects local TCP listeners and shows unregistered processes whose own working directory is inside a Git worktree of the registered project. Requiring the listener's working directory avoids treating IDEs, terminals, and language servers as project services merely because an ancestor command mentions the worktree. These detected worktree services are temporary, read-only results: they are not written to `projects.json`, are grouped by PID, and disappear when the listener stops. Ports already covered by a registered service are not shown twice.
+
 Service groups collect existing project services into a named stack. Starting a group starts services in the saved order. Stopping a group stops services in reverse order. Restarting a group follows the same stop-then-start ordering. Removing a group only removes the grouping metadata; the individual services remain registered.
 
 The console distinguishes three process origins:
 
 - `Console`: started by Worktree Console. Stop and restart are available.
-- `Project external`: started outside the console, but the listening process tree includes the registered project path or service working directory. Stop is available after confirmation, and the backend re-checks the match before terminating the PID.
+- `Project external`: started outside the console, but the listening process tree includes the registered project path, service working directory, or a currently linked worktree. Stop is available after confirmation, and the backend re-reads the worktree list and re-checks the match before terminating the PID.
 - `External`: a configured port or health check is active, but the listening process cannot be matched to the project. Stop remains disabled.
 
 Restart is intentionally limited to console-managed processes so an externally started environment is not replaced by a different registered command by accident.

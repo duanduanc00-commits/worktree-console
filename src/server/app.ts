@@ -49,6 +49,7 @@ import { mapWithConcurrency } from "./concurrency";
 import type {
   ActivityEvent,
   DashboardResponse,
+  DetectedWorktreeService,
   GitOperationResponse,
   GitOperationStatus,
   ProjectSnapshot,
@@ -79,10 +80,19 @@ type ActivityRecorder = {
 };
 
 type ServiceController = {
-  snapshot(projectId: string, service: RegisteredService, projectPath?: string): Promise<ServiceSnapshot>;
-  start(projectId: string, service: RegisteredService): Promise<ServiceSnapshot>;
-  stop(projectId: string, service: RegisteredService, projectPath?: string): Promise<ServiceSnapshot>;
-  restart(projectId: string, service: RegisteredService, projectPath?: string): Promise<ServiceSnapshot>;
+  snapshot(
+    projectId: string,
+    service: RegisteredService,
+    projectPath?: string,
+    worktreePaths?: string[]
+  ): Promise<ServiceSnapshot>;
+  start(projectId: string, service: RegisteredService, projectPath?: string, worktreePaths?: string[]): Promise<ServiceSnapshot>;
+  stop(projectId: string, service: RegisteredService, projectPath?: string, worktreePaths?: string[]): Promise<ServiceSnapshot>;
+  restart(projectId: string, service: RegisteredService, projectPath?: string, worktreePaths?: string[]): Promise<ServiceSnapshot>;
+  discoverWorktreeServices?(
+    worktrees: Array<{ path: string; branch: string | null }>,
+    registeredServices: ServiceSnapshot[]
+  ): Promise<DetectedWorktreeService[]>;
   logs(projectId: string, serviceId: string): Promise<string[]>;
 };
 
@@ -126,7 +136,7 @@ export function createApp({
   async function buildDashboard() {
     const projects = await registry.listProjects();
     const snapshots = await mapWithConcurrency(projects, DASHBOARD_SNAPSHOT_CONCURRENCY, (project) =>
-      snapshotProject(project, serviceManager)
+      snapshotProject(project, serviceManager, { discoverWorktreeServices: true })
     );
     const payload = buildDashboardResponse(snapshots);
     dashboardCache = {
@@ -485,7 +495,8 @@ export function createApp({
   app.post("/api/projects/:id/services/:serviceId/stop", async (request, response, next) => {
     try {
       const { project, service } = await findProjectService(registry, request.params.id, request.params.serviceId);
-      const snapshot = await serviceManager.stop(project.id, service, project.path);
+      const worktreePaths = await readServiceWorktreePaths(project.path);
+      const snapshot = await serviceManager.stop(project.id, service, project.path, worktreePaths);
       await recordActivity(activityLog, {
         action: "service.stop",
         label: "Stopped service",
@@ -503,7 +514,8 @@ export function createApp({
   app.post("/api/projects/:id/services/:serviceId/restart", async (request, response, next) => {
     try {
       const { project, service } = await findProjectService(registry, request.params.id, request.params.serviceId);
-      const snapshot = await serviceManager.restart(project.id, service, project.path);
+      const worktreePaths = await readServiceWorktreePaths(project.path);
+      const snapshot = await serviceManager.restart(project.id, service, project.path, worktreePaths);
       await recordActivity(activityLog, {
         action: "service.restart",
         label: "Restarted service",
@@ -856,14 +868,12 @@ export function createApp({
 
 export async function snapshotProject(
   project: RegisteredProject,
-  serviceManager: ServiceController = new ServiceManager()
+  serviceManager: ServiceController = new ServiceManager(),
+  options: { discoverWorktreeServices?: boolean } = {}
 ): Promise<ProjectSnapshot> {
-  const services = await Promise.all(
-    project.services.map((service) => serviceManager.snapshot(project.id, service, project.path))
-  );
-  const serviceGroups = buildServiceGroupSnapshots(project.serviceGroups, services);
   const exists = await pathExists(project.path);
   if (!exists) {
+    const services = await snapshotRegisteredServices(project, serviceManager);
     return {
       ...project,
       exists: false,
@@ -874,12 +884,14 @@ export async function snapshotProject(
       branches: [],
       recentCommits: [],
       services,
-      serviceGroups
+      detectedServices: [],
+      serviceGroups: buildServiceGroupSnapshots(project.serviceGroups, services)
     };
   }
 
   const gitRepository = await isGitRepository(project.path);
   if (!gitRepository) {
+    const services = await snapshotRegisteredServices(project, serviceManager);
     return {
       ...project,
       exists: true,
@@ -890,7 +902,8 @@ export async function snapshotProject(
       branches: [],
       recentCommits: [],
       services,
-      serviceGroups,
+      detectedServices: [],
+      serviceGroups: buildServiceGroupSnapshots(project.serviceGroups, services),
       error: "Path exists but is not a Git repository."
     };
   }
@@ -904,27 +917,50 @@ export async function snapshotProject(
       readBranchTracking(project.path),
       readRecentCommits(project.path)
     ]);
-    const worktrees = await Promise.all(
-      rawWorktrees.map(async (worktree) => {
-        const [changes, shortHead, baseRefs] = await Promise.all([
-          readWorktreeChanges(worktree.path),
-          readShortHead(worktree.path),
-          readContainingBranches(worktree.path)
-        ]);
-        const enrichedWorktree = {
-          ...worktree,
-          shortHead,
-          baseRefs,
-          clean: changes.length === 0,
-          dirtyFiles: changes.length,
-          changes
-        };
-        return {
-          ...enrichedWorktree,
-          removal: assessWorktreeRemoval(enrichedWorktree, project.path)
-        };
-      })
-    );
+    const worktreePaths = rawWorktrees.map((worktree) => worktree.path);
+    const [worktrees, services] = await Promise.all([
+      Promise.all(rawWorktrees.map(async (worktree) => {
+        try {
+          const [changes, shortHead, baseRefs] = await Promise.all([
+            readWorktreeChanges(worktree.path),
+            readShortHead(worktree.path),
+            readContainingBranches(worktree.path)
+          ]);
+          const enrichedWorktree = {
+            ...worktree,
+            shortHead,
+            baseRefs,
+            clean: changes.length === 0,
+            dirtyFiles: changes.length,
+            changes
+          };
+          return {
+            ...enrichedWorktree,
+            removal: assessWorktreeRemoval(enrichedWorktree, project.path)
+          };
+        } catch (error) {
+          return {
+            ...worktree,
+            shortHead: worktree.head?.slice(0, 7) ?? null,
+            baseRefs: [],
+            clean: false,
+            dirtyFiles: 0,
+            changes: [],
+            removal: {
+              level: "review" as const,
+              label: "Review",
+              reasons: [`Git status unavailable for this worktree: ${(error as Error).message}`],
+              canDelete: false
+            }
+          };
+        }
+      })),
+      snapshotRegisteredServices(project, serviceManager, worktreePaths)
+    ]);
+    const detectedServices = options.discoverWorktreeServices && serviceManager.discoverWorktreeServices
+      ? await serviceManager.discoverWorktreeServices(rawWorktrees, services).catch(() => [])
+      : [];
+    const serviceGroups = buildServiceGroupSnapshots(project.serviceGroups, services);
     const branchTrackingByName = new Map(branchTracking.map((tracking) => [tracking.name, tracking]));
     const branches = branchNames.map((branchName) => {
       const tracking = branchTrackingByName.get(branchName);
@@ -956,9 +992,11 @@ export async function snapshotProject(
       branches,
       recentCommits,
       services,
+      detectedServices,
       serviceGroups
     };
   } catch (error) {
+    const services = await snapshotRegisteredServices(project, serviceManager);
     return {
       ...project,
       exists: true,
@@ -969,9 +1007,29 @@ export async function snapshotProject(
       branches: [],
       recentCommits: [],
       services,
-      serviceGroups,
+      detectedServices: [],
+      serviceGroups: buildServiceGroupSnapshots(project.serviceGroups, services),
       error: (error as Error).message
     };
+  }
+}
+
+async function snapshotRegisteredServices(
+  project: RegisteredProject,
+  serviceManager: ServiceController,
+  worktreePaths: string[] = []
+): Promise<ServiceSnapshot[]> {
+  return Promise.all(
+    project.services.map((service) => serviceManager.snapshot(project.id, service, project.path, worktreePaths))
+  );
+}
+
+async function readServiceWorktreePaths(projectPath: string): Promise<string[]> {
+  try {
+    if (!(await isGitRepository(projectPath))) return [];
+    return (await readWorktrees(projectPath)).map((worktree) => worktree.path);
+  } catch {
+    return [];
   }
 }
 
@@ -1188,14 +1246,15 @@ async function runServiceGroupAction(
   action: ServiceGroupAction
 ): Promise<ServiceGroupActionResponse> {
   const results: ServiceGroupActionResult[] = [];
+  const worktreePaths = action === "start" ? [] : await readServiceWorktreePaths(projectPath);
 
   if (action === "start") {
-    await runServiceGroupOperation(serviceManager, projectId, projectPath, services, "start", results);
+    await runServiceGroupOperation(serviceManager, projectId, projectPath, worktreePaths, services, "start", results);
   } else if (action === "stop") {
-    await runServiceGroupOperation(serviceManager, projectId, projectPath, [...services].reverse(), "stop", results);
+    await runServiceGroupOperation(serviceManager, projectId, projectPath, worktreePaths, [...services].reverse(), "stop", results);
   } else {
-    await runServiceGroupOperation(serviceManager, projectId, projectPath, [...services].reverse(), "stop", results);
-    await runServiceGroupOperation(serviceManager, projectId, projectPath, services, "start", results);
+    await runServiceGroupOperation(serviceManager, projectId, projectPath, worktreePaths, [...services].reverse(), "stop", results);
+    await runServiceGroupOperation(serviceManager, projectId, projectPath, worktreePaths, services, "start", results);
   }
 
   return {
@@ -1211,13 +1270,14 @@ async function runServiceGroupOperation(
   serviceManager: ServiceController,
   projectId: string,
   projectPath: string,
+  worktreePaths: string[],
   services: RegisteredService[],
   operation: ServiceGroupActionOperation,
   results: ServiceGroupActionResult[]
 ): Promise<void> {
   for (const service of services) {
     try {
-      const snapshot = await serviceManager[operation](projectId, service, projectPath);
+      const snapshot = await serviceManager[operation](projectId, service, projectPath, worktreePaths);
       results.push({
         serviceId: service.id,
         serviceName: service.name,

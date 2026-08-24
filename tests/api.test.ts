@@ -137,6 +137,7 @@ describe("createApp", () => {
   });
 
   it("registers project services and returns service snapshots", async () => {
+    await createGitRepo(join(tempDir, "repo"));
     const app = createApp({
       activityLog: new ActivityLog(join(tempDir, "activity.json")),
       registry: new ProjectRegistry(join(tempDir, "projects.json")),
@@ -146,6 +147,7 @@ describe("createApp", () => {
           status: "stopped",
           startedByConsole: false,
           pid: null,
+          processCwd: null,
           processOwnership: "none" as const,
           processOwnerHint: null,
           portsStatus: service.ports.map((port) => ({
@@ -165,6 +167,17 @@ describe("createApp", () => {
         restart: async () => {
           throw new Error("not used");
         },
+        discoverWorktreeServices: async () => [
+          {
+            id: "detected-4321",
+            worktreePath: join(tempDir, "repo"),
+            branch: "main",
+            pid: 4321,
+            processName: "node.exe",
+            processCwd: join(tempDir, "repo"),
+            ports: [6137]
+          }
+        ],
         logs: async () => []
       }
     });
@@ -201,6 +214,14 @@ describe("createApp", () => {
       name: "Admin",
       status: "stopped"
     });
+
+    expect(dashboardResponse.body.projects[0].detectedServices).toEqual([
+      expect.objectContaining({
+        id: "detected-4321",
+        pid: 4321,
+        ports: [6137]
+      })
+    ]);
 
     await request(app)
       .delete(`/api/projects/${projectResponse.body.id}/services/${serviceResponse.body.id}`)
@@ -1166,6 +1187,7 @@ function serviceSnapshot(service: RegisteredService, status: ServiceSnapshot["st
     status,
     startedByConsole: status === "running" || status === "starting",
     pid: status === "running" || status === "starting" ? 1234 : null,
+    processCwd: status === "running" || status === "starting" ? service.cwd : null,
     processOwnership: status === "running" || status === "starting" ? "console" : "none",
     processOwnerHint: status === "running" || status === "starting" ? "Started by this console." : null,
     portsStatus: service.ports.map((port) => ({

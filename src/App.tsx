@@ -61,7 +61,9 @@ import {
   serviceCanRestart,
   serviceCanStop,
   serviceExternalStopConfirmation,
+  serviceConfiguredPath,
   serviceKindLabel,
+  serviceLaunchPath,
   servicePortLabel,
   servicePrimaryActionLabel,
   serviceShowProcessControls,
@@ -2554,6 +2556,7 @@ function ServicePanel({
   const [externalStopService, setExternalStopService] = useState<ServiceSnapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
   const serviceGroups = project.serviceGroups ?? [];
+  const detectedServices = project.detectedServices ?? [];
 
   useEffect(() => {
     groupActionRequestId.current += 1;
@@ -2795,6 +2798,66 @@ function ServicePanel({
           </div>
         )}
       </div>
+      <div className="detected-services">
+        <div className="service-subheading">Detected Worktree Services</div>
+        {detectedServices.length === 0 ? (
+          <div className="empty-state compact">No unregistered listening services detected in project worktrees.</div>
+        ) : (
+          <div className="service-list">
+            {detectedServices.map((service) => (
+              <article className="service-card" key={service.id}>
+                <div className="service-top">
+                  <div className="service-title-row">
+                    <strong>{service.processName ?? `Process ${service.pid}`}</strong>
+                    <span className="service-badges">
+                      <Badge tone="clean">Listening</Badge>
+                      <ExplainableBadge
+                        align="right"
+                        tooltip="Detected because this listening process is running from inside the Git worktree."
+                      >
+                        Auto-detected
+                      </ExplainableBadge>
+                    </span>
+                  </div>
+                </div>
+
+                <div className="service-meta">
+                  <span className="service-path">
+                    <span className="service-meta-label">Launch path</span>
+                    <span className="mono">{service.processCwd ?? service.worktreePath}</span>
+                  </span>
+                  <span className="service-path">
+                    <span className="service-meta-label">Worktree</span>
+                    <span className="mono">{service.worktreePath}</span>
+                  </span>
+                  {service.branch ? <span className="service-secondary">Branch {service.branch}</span> : null}
+                  <span className="service-secondary">PID {service.pid}</span>
+                </div>
+
+                <div className="port-list">
+                  {service.ports.map((port) => (
+                    <span className="port-chip" key={port}>
+                      {port}
+                      <em>listening:{service.pid}</em>
+                    </span>
+                  ))}
+                </div>
+
+                <div className="service-actions">
+                  <Button
+                    title={`Open port ${service.ports[0]}`}
+                    onClick={() => window.open(`http://127.0.0.1:${service.ports[0]}`, "_blank", "noopener,noreferrer")}
+                  >
+                    <ExternalLink size={14} />
+                    Open
+                  </Button>
+                  <span className="service-secondary">Read-only discovery</span>
+                </div>
+              </article>
+            ))}
+          </div>
+        )}
+      </div>
       <div className="service-subheading">Individual Services</div>
       {project.services.length === 0 ? (
         <div className="empty-state compact">No services registered for this project.</div>
@@ -2804,6 +2867,7 @@ function ServicePanel({
             const busy = busyServiceId === service.id;
             const url = serviceUrl(service);
             const lines = logLines[service.id] ?? service.logPreview;
+            const configuredPath = serviceConfiguredPath(service);
             return (
               <article className="service-card" key={service.id}>
                 <div className="service-top">
@@ -2826,7 +2890,16 @@ function ServicePanel({
                 </div>
 
                 <div className="service-meta">
-                  <span className="service-path mono">{service.cwd}</span>
+                  <span className="service-path">
+                    <span className="service-meta-label">Launch path</span>
+                    <span className="mono">{serviceLaunchPath(service)}</span>
+                  </span>
+                  {configuredPath ? (
+                    <span className="service-path">
+                      <span className="service-meta-label">Configured path</span>
+                      <span className="mono">{configuredPath}</span>
+                    </span>
+                  ) : null}
                   <span className="service-secondary">{servicePortLabel(service)}</span>
                   {service.pid ? <span className="service-secondary">PID {service.pid}</span> : null}
                 </div>

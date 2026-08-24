@@ -51,6 +51,7 @@ function service(overrides: Partial<ServiceSnapshot> = {}): ServiceSnapshot {
     status: "running",
     startedByConsole: true,
     pid: 1234,
+    processCwd: "C:/repos/demo",
     processOwnership: "console",
     processOwnerHint: "Started by this console.",
     portsStatus: [{ port: 5173, listening: true, pid: 1234, processName: "node.exe" }],
@@ -83,6 +84,7 @@ function project(overrides: Partial<ProjectSnapshot> = {}): ProjectSnapshot {
     branches: [],
     recentCommits: [],
     services: [],
+    detectedServices: [],
     ...overrides
   };
 }

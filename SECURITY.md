@@ -30,6 +30,8 @@ Do not include:
 
 Runtime data is local-only and may contain sensitive machine details.
 
+Automatic worktree service discovery temporarily reads local TCP listener PIDs, process names, working directories, and process trees. Only listeners whose own working directory is inside a worktree of a registered project are returned to the local browser; discovery results are not persisted. Process command lines remain available to registered-service ownership checks but are not included in the dashboard response.
+
 The packaged `npx worktree-console` runtime stores no data in the repository by default. It stores local data here:
 
 - Windows: `%LOCALAPPDATA%\Worktree Console`
@@ -46,7 +48,7 @@ These files and directories may contain project paths, service commands, ports, 
 ## Security Boundaries
 
 - The app tracks only projects registered by the user.
-- The app must not scan the whole machine automatically.
+- The app must not scan disks or discover unregistered repositories. Listener inspection must remain limited to matching running services against registered projects and their Git-linked worktrees, and unmatched process metadata must not be persisted or returned.
 - The app must not upload local registry or activity data.
 - Destructive Git actions must require safety assessment and confirmation.
-- The service controls must not stop unknown external processes that were only detected by port. Externally started processes may be stopped only after the backend matches the listening process tree to the registered project path or service working directory.
+- The service controls must not stop unknown external processes that were only detected by port. Externally started registered services may be stopped only after the backend matches the listening process tree to the registered project path, service working directory, or a freshly read linked worktree path. Auto-detected unregistered services remain read-only.

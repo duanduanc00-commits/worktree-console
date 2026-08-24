@@ -1855,6 +1855,12 @@ button.stat {
   margin-bottom: 12px;
 }
 
+.detected-services {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
 .service-subheading {
   color: var(--muted);
   font-size: 11px;
@@ -2012,8 +2018,17 @@ button.stat {
 }
 
 .service-path {
+  display: grid;
+  gap: 2px;
   overflow-wrap: anywhere;
   white-space: normal;
+}
+
+.service-meta-label {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
 }
 
 .service-secondary {

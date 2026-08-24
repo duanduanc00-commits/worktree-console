@@ -917,6 +917,7 @@ function projectFixture(overrides: Partial<ProjectSnapshot> = {}): ProjectSnapsh
     branches: [],
     recentCommits: [],
     services: [],
+    detectedServices: [],
     serviceGroups: [],
     worktrees: [],
     ...overrides

@@ -88,7 +88,7 @@ When changing local data behavior, destructive actions, service controls, Git cl
 - `src/server/git.ts` owns Git command helpers and parsers.
 - `src/server/gitOperations.ts` owns route-safe Git operation validation, status building, and safety checks.
 - `src/server/registry.ts` owns persistent project, service, and service-group registration.
-- `src/server/services.ts` owns local process, process-tree ownership, and port detection.
+- `src/server/services.ts` owns local process control, process-tree ownership, registered-service port checks, and read-only worktree listener discovery.
 - `src/server/health.ts` derives health issues from project snapshots only; keep it pure.
 - `src/server/activity.ts` records local console operations.
 - `src/lib/*-ui.ts` files contain small UI helper functions with direct tests.
@@ -102,7 +102,7 @@ When changing local data behavior, destructive actions, service controls, Git cl
 - Git operation routes must re-read registered project snapshots before running commands.
 - Do not add force push, merge, rebase, checkout, stash apply/drop, or remote setup without a separate design.
 - Detached worktrees should not be marked safe when their HEAD is not contained by any reported branch.
-- Do not stop unknown external processes that were only detected by port. Service controls may stop console-started processes, and may stop external processes only when the backend matches the listening PID's process tree to the registered project path or service working directory.
+- Do not stop unknown external processes that were only detected by port. Auto-detected unregistered worktree services remain read-only. Service controls may stop console-started processes, and may stop registered external services only when the backend matches the listening PID's process tree to the registered project path, service working directory, or a freshly read linked worktree path.
 - Keep diff APIs bounded and only allow diffs for changed files reported by the corresponding worktree snapshot.
 - Health summary cards are interactive filters. Keep their labels and tooltip text short.
 - Activity log should record meaningful user actions, especially destructive actions and service operations.

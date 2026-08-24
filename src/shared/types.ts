@@ -130,10 +130,21 @@ export type ServicePortStatus = {
 
 export type ServiceProcessOwnership = "none" | "console" | "project" | "unknown";
 
+export type DetectedWorktreeService = {
+  id: string;
+  worktreePath: string;
+  branch: string | null;
+  pid: number;
+  processName: string | null;
+  processCwd: string | null;
+  ports: number[];
+};
+
 export type ServiceSnapshot = RegisteredService & {
   status: "running" | "stopped" | "starting" | "error" | "port-occupied";
   startedByConsole: boolean;
   pid: number | null;
+  processCwd: string | null;
   processOwnership: ServiceProcessOwnership;
   processOwnerHint: string | null;
   portsStatus: ServicePortStatus[];
@@ -178,6 +189,7 @@ export type ProjectSnapshot = Omit<RegisteredProject, "services" | "serviceGroup
   branches: BranchInfo[];
   recentCommits: RecentCommit[];
   services: ServiceSnapshot[];
+  detectedServices: DetectedWorktreeService[];
   serviceGroups?: ServiceGroupSnapshot[];
   error?: string;
 };

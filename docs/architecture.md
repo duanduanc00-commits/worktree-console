@@ -23,7 +23,7 @@ Shared backend
   +-- Service manager for local process and port checks
 ```
 
-The app does not scan the full machine. It builds dashboard state from registered project paths and their Git-linked worktrees.
+The app does not scan disks or discover repositories outside the registry. It builds dashboard state from registered project paths and their Git-linked worktrees. Service discovery enumerates local TCP listeners, but retains and returns only processes matched to those registered worktree paths.
 
 ## Main Modules
 
@@ -46,7 +46,8 @@ The app does not scan the full machine. It builds dashboard state from registere
 1. A project is registered through the UI or API.
 2. The registry writes project metadata to local JSON.
 3. Dashboard refresh reads every registered project path.
-4. Git state, worktrees, branches, commits, service state, and health issues are returned as one dashboard snapshot.
+4. The service manager matches local listeners to the registered project's current Git worktree paths and discards unmatched process metadata.
+5. Git state, worktrees, branches, commits, registered service state, read-only detected worktree services, and health issues are returned as one dashboard snapshot.
 5. UI actions that change state call the API, then refresh the dashboard and activity log as needed.
 
 The browser also refreshes the open console automatically every 30 seconds while the tab is visible. Hidden tabs skip automatic refresh to avoid unnecessary local Git and service checks.
@@ -97,10 +98,12 @@ Services are registered per project with a working directory, command, optional 
 The console distinguishes between:
 
 - Console-managed processes started by Worktree Console.
-- Project external processes started outside the console whose listening PID process tree matches the registered project path or service working directory.
+- Project external processes started outside the console whose listening PID process tree matches the registered project path, service working directory, or a linked worktree.
 - Unknown external processes detected through ports or health checks without a project-path match.
 
-Stop and restart controls are available for console-managed processes. Stop is also available for project external processes after UI confirmation; the backend re-inspects the registered service ports and process tree before terminating any PID. Unknown external processes are detected and shown, but Stop remains disabled. Restart stays console-managed only.
+Dashboard refresh also performs read-only discovery for unregistered TCP listeners. Listeners are grouped by PID and matched only when the listening process's own working directory is inside a current Git worktree; this stricter rule excludes IDEs, terminals, and language servers whose ancestor process merely references a worktree. A process is also excluded when any listening port is already covered by a registered service. Results are returned in `ProjectSnapshot.detectedServices`; they are never added to the registry and expose no start, stop, restart, log, or delete controls.
+
+Stop and restart controls are available for console-managed processes. Stop is also available for registered project external processes after UI confirmation; the backend re-reads linked worktrees and re-inspects the registered service ports and process tree before terminating any PID. Unknown external processes and auto-detected unregistered services cannot be stopped. Restart stays console-managed only.
 
 ## Health
 

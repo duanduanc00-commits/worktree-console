@@ -85,6 +85,16 @@ export function servicePortLabel(service: ServiceSnapshot): string {
   return `Ports ${service.ports.join(", ")}`;
 }
 
+export function serviceLaunchPath(service: ServiceSnapshot): string {
+  return service.processCwd ?? service.cwd;
+}
+
+export function serviceConfiguredPath(service: ServiceSnapshot): string | null {
+  const launchPath = normalizePathForDisplay(serviceLaunchPath(service));
+  const configuredPath = normalizePathForDisplay(service.cwd);
+  return launchPath === configuredPath ? null : service.cwd;
+}
+
 function isActiveService(service: ServiceSnapshot): boolean {
   return service.status === "running" || service.status === "starting" || service.status === "port-occupied";
 }
@@ -103,4 +113,8 @@ function listeningPidLabel(service: ServiceSnapshot): string {
     )
   );
   return pids.length > 0 ? pids.join(", ") : "Unknown";
+}
+
+function normalizePathForDisplay(path: string): string {
+  return path.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
 }

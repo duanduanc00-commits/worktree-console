@@ -4,7 +4,9 @@ import {
   serviceExternalStopConfirmation,
   serviceCanRestart,
   serviceCanStop,
+  serviceConfiguredPath,
   serviceKindLabel,
+  serviceLaunchPath,
   servicePortLabel,
   servicePrimaryActionLabel,
   serviceShowProcessControls,
@@ -24,6 +26,7 @@ const baseService: ServiceSnapshot = {
   status: "stopped",
   startedByConsole: false,
   pid: null,
+  processCwd: null,
   processOwnership: "none",
   processOwnerHint: null,
   portsStatus: [{ port: 5273, listening: false, pid: null, processName: null }],
@@ -84,6 +87,18 @@ describe("service-ui", () => {
     expect(serviceKindLabel(unknownExternal)).toBe("External");
     expect(serviceCanStop(unknownExternal)).toBe(false);
     expect(serviceCanRestart(unknownExternal)).toBe(false);
+  });
+
+  it("uses detected process cwd as the launch path when available", () => {
+    const externalFromWorktree: ServiceSnapshot = {
+      ...baseService,
+      cwd: "E:/voice_assistant/voice-assistant",
+      processCwd: "E:/codex/worktrees/9218/voice-assistant"
+    };
+
+    expect(serviceLaunchPath(externalFromWorktree)).toBe("E:/codex/worktrees/9218/voice-assistant");
+    expect(serviceConfiguredPath(externalFromWorktree)).toBe("E:/voice_assistant/voice-assistant");
+    expect(serviceConfiguredPath(baseService)).toBeNull();
   });
 
   it("builds confirmation details for project-owned external stops", () => {
