@@ -61,6 +61,53 @@ describe("createApp", () => {
     expect(healthResponse.body).toEqual({ ok: true });
   });
 
+  it("orders worktrees and branches with the most recent activity first", async () => {
+    const repoPath = join(tempDir, "repo");
+    await git(tempDir, ["init", repoPath]);
+    await git(repoPath, ["config", "user.email", "test@example.com"]);
+    await git(repoPath, ["config", "user.name", "Test User"]);
+    await writeLines(repoPath, "README.md", 2);
+    await git(repoPath, ["add", "."]);
+    await commitWithDate(repoPath, "Initial commit", "2020-01-01T00:00:00+00:00");
+    const { stdout } = await git(repoPath, ["symbolic-ref", "--short", "HEAD"]);
+    const mainBranch = stdout.trim();
+
+    const activeBranch = "zzz-active";
+    const activeWorktreePath = join(tempDir, "repo-active");
+    await git(repoPath, ["branch", activeBranch]);
+    await git(repoPath, ["worktree", "add", activeWorktreePath, activeBranch]);
+    await writeLines(activeWorktreePath, "feature.txt", 3);
+    await git(activeWorktreePath, ["add", "."]);
+    await commitWithDate(activeWorktreePath, "Active branch commit", "2021-01-01T00:00:00+00:00");
+
+    const app = createApp({
+      activityLog: new ActivityLog(join(tempDir, "activity.json")),
+      registry: new ProjectRegistry(join(tempDir, "projects.json"))
+    });
+
+    const addResponse = await request(app)
+      .post("/api/projects")
+      .send({ name: "Ordered repo", path: repoPath })
+      .expect(201);
+
+    const response = await request(app).get("/api/projects").expect(200);
+    const project = response.body.projects.find((candidate: { id: string }) => candidate.id === addResponse.body.id);
+
+    expect(project.branches.map((branch: { name: string }) => branch.name)).toEqual([activeBranch, mainBranch]);
+    expect(project.branches[0].lastCommitAt).toBeGreaterThan(project.branches[1].lastCommitAt);
+    expect(project.worktrees.map((worktree: { branch: string | null }) => worktree.branch)).toEqual([activeBranch, mainBranch]);
+
+    await writeLines(repoPath, "local-note.md", 1);
+
+    const refreshedResponse = await request(app).get("/api/projects").expect(200);
+    const refreshedProject = refreshedResponse.body.projects.find(
+      (candidate: { id: string }) => candidate.id === addResponse.body.id
+    );
+
+    expect(refreshedProject.worktrees.map((worktree: { branch: string | null }) => worktree.branch)).toEqual([mainBranch, activeBranch]);
+    expect(refreshedProject.worktrees[0].lastActivityAt).toBeGreaterThan(1_600_000_000);
+  });
+
   it("registers projects and returns dashboard snapshots", async () => {
     const activityLog = new ActivityLog(join(tempDir, "activity.json"));
     const app = createApp({
@@ -1115,6 +1162,15 @@ async function git(cwd: string, args: string[]) {
     cwd,
     windowsHide: true,
     timeout: 12000
+  });
+}
+
+async function commitWithDate(cwd: string, message: string, isoDate: string): Promise<void> {
+  await execFileAsync("git", ["commit", "-m", message, `--date=${isoDate}`], {
+    cwd,
+    windowsHide: true,
+    timeout: 12000,
+    env: { ...process.env, GIT_COMMITTER_DATE: isoDate }
   });
 }
 

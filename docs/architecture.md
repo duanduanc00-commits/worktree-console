@@ -39,6 +39,7 @@ The app does not scan disks or discover repositories outside the registry. It bu
 - `src/server/services.ts` owns process spawning, stop/restart behavior, health checks, port detection, and process-tree ownership checks.
 - `src/server/health.ts` derives actionable health issues from project snapshots.
 - `src/server/activity.ts` records local operations.
+- `src/server/ordering.ts` sorts snapshot worktrees and branches so the most recently changed entries come first.
 - `src/shared/types.ts` defines shared API and registry types.
 
 ## Data Flow

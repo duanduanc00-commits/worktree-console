@@ -12,7 +12,7 @@ The app only tracks projects you register. Runtime data stays local and is ignor
 - Register only the local projects you want to track.
 - Review a Health view for missing projects, dirty checkouts, safe cleanup candidates, stopped services, and occupied ports.
 - Click Health summary cards to filter the issue list; hover or focus them for a short explanation of each count.
-- Inspect worktrees, local branches, upstream/gone-upstream state, ahead/behind counts, recent commits, and safe-removal status.
+- Inspect worktrees, local branches, upstream/gone-upstream state, ahead/behind counts, recent commits, and safe-removal status. Worktrees and branches are ordered by recent activity, so entries with the latest commits or uncommitted changes appear first.
 - Associate branch rows with their owning worktree and open related changes when local modifications exist.
 - Open a bounded diff preview for changed worktree files without leaving the console.
 - Run daily Git operations from a wide project Git tab: fetch, pull, push, stage, unstage, commit, and stash.

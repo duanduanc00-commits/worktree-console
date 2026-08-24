@@ -49,6 +49,8 @@ export type WorktreeInfo = {
   clean?: boolean;
   dirtyFiles?: number;
   changes?: WorktreeChange[];
+  /** Unix seconds of the most recent activity: latest HEAD commit or changed-file modification time. */
+  lastActivityAt?: number | null;
 };
 
 export type BranchInfo = {
@@ -61,6 +63,8 @@ export type BranchInfo = {
   upstreamGone?: boolean;
   ahead?: number;
   behind?: number;
+  /** Unix seconds of the branch tip's latest commit. */
+  lastCommitAt?: number | null;
   removal: RemovalAssessment;
 };
 

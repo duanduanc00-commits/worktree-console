@@ -1,6 +1,6 @@
 import { createReadStream } from "node:fs";
 import { access, lstat, readFile, readlink } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { join, dirname, resolve } from "node:path";
 import { promisify } from "node:util";
 import { execFile } from "node:child_process";
 
@@ -20,6 +20,7 @@ const untrackedDiffPreviewChars = 64 * 1024;
 const gitdirPrefix = /^gitdir:\s*(.+)\s*$/i;
 const windowsDrivePath = /^[a-zA-Z]:\//;
 const defaultGitTimeoutMs = 12000;
+const futureMtimeGraceSeconds = 60;
 
 type GitExecOptions = {
   timeoutMs?: number;
@@ -38,6 +39,7 @@ export type BranchTrackingInfo = {
   upstreamGone: boolean;
   ahead: number;
   behind: number;
+  lastCommitAt: number | null;
 };
 
 export type SyntheticUntrackedDiffInput =
@@ -68,7 +70,7 @@ export function parseBranchTrackingRefs(output: string): BranchTrackingInfo[] {
   const entries: BranchTrackingInfo[] = [];
   const fields = output.split("\0").map(stripRecordSeparator);
 
-  for (let index = 0; index + 2 < fields.length; index += 3) {
+  for (let index = 0; index + 3 < fields.length; index += 4) {
     const branchName = fields[index];
     if (!branchName) continue;
 
@@ -80,7 +82,8 @@ export function parseBranchTrackingRefs(output: string): BranchTrackingInfo[] {
       upstream,
       upstreamGone,
       ahead: upstream && !upstreamGone ? numberFromStatus(track, /ahead\s+(\d+)/) : 0,
-      behind: upstream && !upstreamGone ? numberFromStatus(track, /behind\s+(\d+)/) : 0
+      behind: upstream && !upstreamGone ? numberFromStatus(track, /behind\s+(\d+)/) : 0,
+      lastCommitAt: parseTimestampSeconds(fields[index + 3])
     });
   }
 
@@ -311,10 +314,65 @@ export async function readBranches(path: string): Promise<string[]> {
 export async function readBranchTracking(path: string): Promise<BranchTrackingInfo[]> {
   const { stdout } = await git(path, [
     "for-each-ref",
-    "--format=%(refname:short)%00%(upstream:short)%00%(upstream:track)%00",
+    "--format=%(refname:short)%00%(upstream:short)%00%(upstream:track)%00%(committerdate:unix)%00",
     "refs/heads"
   ]);
   return parseBranchTrackingRefs(stdout);
+}
+
+export function parseLastCommitTimestamp(output: string): number | null {
+  return parseTimestampSeconds(output);
+}
+
+export async function readLastCommitTimestamp(path: string): Promise<number | null> {
+  try {
+    const { stdout } = await git(path, ["log", "-1", "--format=%ct"]);
+    return parseLastCommitTimestamp(stdout);
+  } catch {
+    return null;
+  }
+}
+
+export async function readChangesLatestMtime(
+  worktreePath: string,
+  changes: WorktreeChange[]
+): Promise<number | null> {
+  const maxAllowedSeconds = Math.floor(Date.now() / 1000) + futureMtimeGraceSeconds;
+  const modifiedSeconds = await Promise.all(
+    changes.map(async (change) => {
+      const seconds = await readChangeMtimeSeconds(worktreePath, change);
+      return seconds === null ? null : Math.min(seconds, maxAllowedSeconds);
+    })
+  );
+
+  return modifiedSeconds.reduce<number | null>(
+    (latest, seconds) => (seconds !== null && (latest === null || seconds > latest) ? seconds : latest),
+    null
+  );
+}
+
+async function readChangeMtimeSeconds(worktreePath: string, change: WorktreeChange): Promise<number | null> {
+  const candidates = isDeletedChange(change) ? [change.path, dirname(change.path)] : [change.path];
+
+  for (const candidate of candidates) {
+    try {
+      const stats = await lstat(join(worktreePath, candidate));
+      return Math.floor(stats.mtimeMs / 1000);
+    } catch {
+      continue;
+    }
+  }
+
+  return null;
+}
+
+function isDeletedChange(change: WorktreeChange): boolean {
+  return change.raw.slice(0, 2).includes("D") || change.code.includes("D");
+}
+
+function parseTimestampSeconds(value: string | undefined): number | null {
+  const seconds = Number(value?.trim());
+  return Number.isFinite(seconds) && seconds > 0 ? seconds : null;
 }
 
 export async function readMergedBranches(path: string): Promise<string[]> {

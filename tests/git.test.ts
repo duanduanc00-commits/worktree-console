@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, utimes, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -13,7 +13,10 @@ import {
   limitDiffLines,
   parseBranchTrackingRefs,
   parseBranchStatus,
+  parseLastCommitTimestamp,
   parseShortStatusChanges,
+  readChangesLatestMtime,
+  readLastCommitTimestamp,
   gitStatusTimeoutMs,
   resolveGitExecutionContext,
   resolveGitPath,
@@ -66,43 +69,138 @@ describe("parseBranchTrackingRefs", () => {
       "main",
       "",
       "",
+      "1700000000",
       "\nfeature/ahead",
       "origin/feature/ahead",
       "[ahead 2]",
+      "1700000100",
       "\nfeature/behind",
       "origin/feature/behind",
       "[behind 3]",
+      "1700000200",
       "\nfeature/diverged",
       "origin/feature/diverged",
       "[ahead 2, behind 3]",
+      "1700000300",
       "\nteam/alice/feature-demo",
       "origin/team/alice/feature-demo",
       "[ahead 1]",
+      "1700000400",
       "\nfeature/pipe|name",
       "origin/feature/pipe|name",
-      "[behind 1]"
+      "[behind 1]",
+      "1700000500"
     ].join("\0");
 
     expect(parseBranchTrackingRefs(output)).toEqual([
-      { name: "main", upstream: null, upstreamGone: false, ahead: 0, behind: 0 },
-      { name: "feature/ahead", upstream: "origin/feature/ahead", upstreamGone: false, ahead: 2, behind: 0 },
-      { name: "feature/behind", upstream: "origin/feature/behind", upstreamGone: false, ahead: 0, behind: 3 },
-      { name: "feature/diverged", upstream: "origin/feature/diverged", upstreamGone: false, ahead: 2, behind: 3 },
-      { name: "team/alice/feature-demo", upstream: "origin/team/alice/feature-demo", upstreamGone: false, ahead: 1, behind: 0 },
-      { name: "feature/pipe|name", upstream: "origin/feature/pipe|name", upstreamGone: false, ahead: 0, behind: 1 }
+      { name: "main", upstream: null, upstreamGone: false, ahead: 0, behind: 0, lastCommitAt: 1700000000 },
+      { name: "feature/ahead", upstream: "origin/feature/ahead", upstreamGone: false, ahead: 2, behind: 0, lastCommitAt: 1700000100 },
+      { name: "feature/behind", upstream: "origin/feature/behind", upstreamGone: false, ahead: 0, behind: 3, lastCommitAt: 1700000200 },
+      { name: "feature/diverged", upstream: "origin/feature/diverged", upstreamGone: false, ahead: 2, behind: 3, lastCommitAt: 1700000300 },
+      { name: "team/alice/feature-demo", upstream: "origin/team/alice/feature-demo", upstreamGone: false, ahead: 1, behind: 0, lastCommitAt: 1700000400 },
+      { name: "feature/pipe|name", upstream: "origin/feature/pipe|name", upstreamGone: false, ahead: 0, behind: 1, lastCommitAt: 1700000500 }
     ]);
   });
 
   it("preserves gone upstream state instead of treating it as synchronized", () => {
-    expect(parseBranchTrackingRefs(["feature/gone", "origin/feature/gone", "[gone]"].join("\0"))).toEqual([
-      { name: "feature/gone", upstream: "origin/feature/gone", upstreamGone: true, ahead: 0, behind: 0 }
+    expect(
+      parseBranchTrackingRefs(["feature/gone", "origin/feature/gone", "[gone]", "1700000099"].join("\0"))
+    ).toEqual([
+      { name: "feature/gone", upstream: "origin/feature/gone", upstreamGone: true, ahead: 0, behind: 0, lastCommitAt: 1700000099 }
     ]);
   });
 
   it("tolerates unexpected tracking text without throwing", () => {
-    expect(parseBranchTrackingRefs(["feature/weird", "origin/feature/weird", "[tracking weirdly]"].join("\0"))).toEqual([
-      { name: "feature/weird", upstream: "origin/feature/weird", upstreamGone: false, ahead: 0, behind: 0 }
+    expect(
+      parseBranchTrackingRefs(["feature/weird", "origin/feature/weird", "[tracking weirdly]", ""].join("\0"))
+    ).toEqual([
+      { name: "feature/weird", upstream: "origin/feature/weird", upstreamGone: false, ahead: 0, behind: 0, lastCommitAt: null }
     ]);
+  });
+});
+
+describe("parseLastCommitTimestamp", () => {
+  it("parses unix commit timestamps", () => {
+    expect(parseLastCommitTimestamp("1700000123\n")).toBe(1700000123);
+  });
+
+  it("returns null for missing or invalid timestamps", () => {
+    expect(parseLastCommitTimestamp("")).toBeNull();
+    expect(parseLastCommitTimestamp("\n")).toBeNull();
+    expect(parseLastCommitTimestamp("not-a-number")).toBeNull();
+    expect(parseLastCommitTimestamp("0")).toBeNull();
+  });
+});
+
+describe("readChangesLatestMtime", () => {
+  it("returns the newest changed-file mtime in unix seconds", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "worktree-console-mtime-"));
+    try {
+      await writeFile(join(tempDir, "a.txt"), "a\n");
+      const changes = [{ code: "M", path: "a.txt", raw: "M  a.txt" }];
+
+      const latest = await readChangesLatestMtime(tempDir, changes);
+
+      expect(latest).not.toBeNull();
+      expect(latest).toBeLessThanOrEqual(Math.floor(Date.now() / 1000));
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("falls back to the parent directory for deleted files", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "worktree-console-mtime-"));
+    try {
+      await mkdir(join(tempDir, "sub"));
+      const changes = [{ code: "D", path: "sub/gone.txt", raw: " D sub/gone.txt" }];
+
+      const latest = await readChangesLatestMtime(tempDir, changes);
+
+      expect(latest).not.toBeNull();
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("clamps future file mtimes near the current time", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "worktree-console-mtime-"));
+    try {
+      const filePath = join(tempDir, "future.txt");
+      await writeFile(filePath, "future\n");
+      const farFuture = new Date("2100-01-01T00:00:00Z");
+      await utimes(filePath, farFuture, farFuture);
+      const changes = [{ code: "??", path: "future.txt", raw: "?? future.txt" }];
+
+      const latest = await readChangesLatestMtime(tempDir, changes);
+
+      expect(latest).not.toBeNull();
+      expect(latest).toBeLessThanOrEqual(Math.floor(Date.now() / 1000) + 60);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("returns null when no changed path can be inspected", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "worktree-console-mtime-"));
+    try {
+      const changes = [{ code: "D", path: "missing/gone.txt", raw: " D missing/gone.txt" }];
+
+      expect(await readChangesLatestMtime(tempDir, [])).toBeNull();
+      expect(await readChangesLatestMtime(tempDir, changes)).toBeNull();
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("readLastCommitTimestamp", () => {
+  it("returns null outside a Git repository", async () => {
+    const tempDir = await mkdtemp(join(tmpdir(), "worktree-console-commit-time-"));
+    try {
+      expect(await readLastCommitTimestamp(tempDir)).toBeNull();
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
+    }
   });
 });
 

@@ -18,7 +18,9 @@ import {
   readBranches,
   readBranchStatus,
   readBranchTracking,
+  readChangesLatestMtime,
   readContainingBranches,
+  readLastCommitTimestamp,
   readMergedBranches,
   readRecentCommits,
   readShortHead,
@@ -46,6 +48,7 @@ import { ServiceManager } from "./services";
 import { selectFolder as selectLocalFolder } from "./folderPicker";
 import { buildHealthSummary } from "./health";
 import { mapWithConcurrency } from "./concurrency";
+import { sortBranchesByRecentActivity, sortWorktreesByRecentActivity } from "./ordering";
 import type {
   ActivityEvent,
   DashboardResponse,
@@ -922,22 +925,31 @@ export async function snapshotProject(
       readBranchTracking(project.path),
       readRecentCommits(project.path)
     ]);
+    const branchTrackingByName = new Map(branchTracking.map((tracking) => [tracking.name, tracking]));
     const worktreePaths = rawWorktrees.map((worktree) => worktree.path);
     const [worktrees, services] = await Promise.all([
       Promise.all(rawWorktrees.map(async (worktree) => {
         try {
-          const [changes, shortHead, baseRefs] = await Promise.all([
+          const trackedTipCommitAt = worktree.branch ? branchTrackingByName.get(worktree.branch)?.lastCommitAt : undefined;
+          const [changes, shortHead, baseRefs, loggedCommitAt] = await Promise.all([
             readWorktreeChanges(worktree.path),
             readShortHead(worktree.path),
-            readContainingBranches(worktree.path)
+            readContainingBranches(worktree.path),
+            trackedTipCommitAt === undefined
+              ? readLastCommitTimestamp(worktree.path)
+              : Promise.resolve(null)
           ]);
+          const lastCommitAt = trackedTipCommitAt ?? loggedCommitAt ?? null;
+          const changesMtime = await readChangesLatestMtime(worktree.path, changes);
+          const lastActivityAt = latestTimestamp(lastCommitAt, changesMtime);
           const enrichedWorktree = {
             ...worktree,
             shortHead,
             baseRefs,
             clean: changes.length === 0,
             dirtyFiles: changes.length,
-            changes
+            changes,
+            lastActivityAt
           };
           return {
             ...enrichedWorktree,
@@ -951,6 +963,7 @@ export async function snapshotProject(
             clean: false,
             dirtyFiles: 0,
             changes: [],
+            lastActivityAt: null,
             removal: {
               level: "review" as const,
               label: "Review",
@@ -966,8 +979,7 @@ export async function snapshotProject(
       ? await serviceManager.discoverWorktreeServices(rawWorktrees, services).catch(() => [])
       : [];
     const serviceGroups = buildServiceGroupSnapshots(project.serviceGroups, services);
-    const branchTrackingByName = new Map(branchTracking.map((tracking) => [tracking.name, tracking]));
-    const branches = branchNames.map((branchName) => {
+    const branches = sortBranchesByRecentActivity(branchNames.map((branchName) => {
       const tracking = branchTrackingByName.get(branchName);
       return {
         ...buildBranchInfo({
@@ -976,6 +988,7 @@ export async function snapshotProject(
           mergedBranches,
           worktrees
         }),
+        lastCommitAt: tracking?.lastCommitAt ?? null,
         ...(tracking
           ? {
               upstream: tracking.upstream,
@@ -985,7 +998,7 @@ export async function snapshotProject(
             }
           : {})
       };
-    });
+    }));
 
     return {
       ...project,
@@ -993,7 +1006,7 @@ export async function snapshotProject(
       isGitRepository: true,
       status: branch.clean ? "clean" : "dirty",
       branch,
-      worktrees,
+      worktrees: sortWorktreesByRecentActivity(worktrees),
       branches,
       recentCommits,
       services,
@@ -1017,6 +1030,11 @@ export async function snapshotProject(
       error: (error as Error).message
     };
   }
+}
+
+function latestTimestamp(...timestamps: (number | null)[]): number | null {
+  const valid = timestamps.filter((timestamp): timestamp is number => timestamp !== null);
+  return valid.length ? Math.max(...valid) : null;
 }
 
 async function snapshotRegisteredServices(
