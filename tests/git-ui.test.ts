@@ -68,7 +68,7 @@ describe("git-ui helpers", () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: RequestInfo | URL) => {
-        if (String(input) === "/api/projects") {
+        if (isDashboardRequest(input)) {
           return new Response(JSON.stringify(dashboardFixture()), {
             headers: { "Content-Type": "application/json" },
             status: 200
@@ -98,7 +98,7 @@ describe("git-ui helpers", () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: RequestInfo | URL) => {
-        if (String(input) === "/api/projects") {
+        if (isDashboardRequest(input)) {
           return jsonResponse(
             dashboardFixture([
               projectFixture({
@@ -198,7 +198,7 @@ describe("git-ui helpers", () => {
       "fetch",
       vi.fn(async (input: RequestInfo | URL) => {
         const url = String(input);
-        if (url === "/api/projects") {
+        if (isDashboardRequest(url)) {
           return jsonResponse(dashboardFixture([alpha, beta]));
         }
         if (url.startsWith("/api/projects/alpha/git/status")) {
@@ -267,7 +267,7 @@ describe("git-ui helpers", () => {
       vi.fn(async (input: RequestInfo | URL) => {
         const url = String(input);
         requestedUrls.push(url);
-        if (url === "/api/projects") {
+        if (isDashboardRequest(url)) {
           return jsonResponse(dashboardFixture([project]));
         }
         if (url.includes("path=E%3A%2Frepo%2Fconsole%2F.worktrees%2Ffeature-a")) {
@@ -325,7 +325,7 @@ describe("git-ui helpers", () => {
       "fetch",
       vi.fn(async (input: RequestInfo | URL) => {
         const url = String(input);
-        if (url === "/api/projects") {
+        if (isDashboardRequest(url)) {
           return jsonResponse(dashboardFixture([project]));
         }
         if (url.startsWith("/api/projects/project-1/git/status")) {
@@ -390,7 +390,7 @@ describe("git-ui helpers", () => {
       vi.fn(async (input: RequestInfo | URL) => {
         const url = String(input);
         requestedUrls.push(url);
-        if (url === "/api/projects") {
+        if (isDashboardRequest(url)) {
           return jsonResponse(dashboardFixture([project]));
         }
         if (url.includes("path=E%3A%2Frepo%2Fconsole%2F.worktrees%2Ffeature-a")) {
@@ -452,7 +452,7 @@ describe("git-ui helpers", () => {
       "fetch",
       vi.fn(async (input: RequestInfo | URL) => {
         const url = String(input);
-        if (url === "/api/projects") {
+        if (isDashboardRequest(url)) {
           return jsonResponse(dashboardFixture());
         }
         if (url.startsWith("/api/projects/project-1/git/status")) {
@@ -500,7 +500,7 @@ describe("git-ui helpers", () => {
       "fetch",
       vi.fn(async (input: RequestInfo | URL) => {
         const url = String(input);
-        if (url === "/api/projects") {
+        if (isDashboardRequest(url)) {
           return jsonResponse(dashboardFixture());
         }
         if (url.startsWith("/api/projects/project-1/git/status")) {
@@ -553,7 +553,7 @@ describe("git-ui helpers", () => {
       "fetch",
       vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = String(input);
-        if (url === "/api/projects") {
+        if (isDashboardRequest(url)) {
           return jsonResponse(dashboardFixture());
         }
         if (url.startsWith("/api/projects/project-1/git/status")) {
@@ -607,7 +607,7 @@ describe("git-ui helpers", () => {
       "fetch",
       vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
         const url = String(input);
-        if (url === "/api/projects") {
+        if (isDashboardRequest(url)) {
           return jsonResponse(dashboardFixture());
         }
         if (url.startsWith("/api/projects/project-1/git/status")) {
@@ -656,7 +656,7 @@ describe("git-ui helpers", () => {
       "fetch",
       vi.fn(async (input: RequestInfo | URL) => {
         const url = String(input);
-        if (url === "/api/projects") {
+        if (isDashboardRequest(url)) {
           return jsonResponse(dashboardFixture());
         }
         if (url.startsWith("/api/projects/project-1/git/status")) {
@@ -717,7 +717,7 @@ describe("git-ui helpers", () => {
       vi.fn(async (input: RequestInfo | URL) => {
         const url = String(input);
         requestedUrls.push(url);
-        if (url === "/api/projects") {
+        if (isDashboardRequest(url)) {
           return jsonResponse(dashboardFixture([project]));
         }
         if (url.includes("path=E%3A%2Frepo%2Fconsole%2F.worktrees%2Ffeature-a")) {
@@ -753,7 +753,7 @@ describe("git-ui helpers", () => {
       "fetch",
       vi.fn(async (input: RequestInfo | URL) => {
         const url = String(input);
-        if (url === "/api/projects") {
+        if (isDashboardRequest(url)) {
           return jsonResponse(dashboardFixture());
         }
         if (url.startsWith("/api/projects/project-1/git/status")) {
@@ -793,7 +793,7 @@ describe("git-ui helpers", () => {
       "fetch",
       vi.fn(async (input: RequestInfo | URL) => {
         const url = String(input);
-        if (url === "/api/projects") {
+        if (isDashboardRequest(url)) {
           return jsonResponse(dashboardFixture());
         }
         if (url.startsWith("/api/projects/project-1/git/status")) {
@@ -833,7 +833,7 @@ describe("git-ui helpers", () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async (input: RequestInfo | URL) => {
-        if (String(input) === "/api/projects") {
+        if (isDashboardRequest(input)) {
           return jsonResponse(dashboardFixture());
         }
 
@@ -863,7 +863,7 @@ describe("git-ui helpers", () => {
       "fetch",
       vi.fn(async (input: RequestInfo | URL) => {
         const url = String(input);
-        if (url === "/api/projects") {
+        if (isDashboardRequest(url)) {
           return jsonResponse(dashboardFixture());
         }
         if (url.startsWith("/api/projects/project-1/git/status")) {
@@ -997,6 +997,10 @@ function jsonResponse(payload: unknown, status = 200) {
     headers: { "Content-Type": "application/json" },
     status
   });
+}
+
+function isDashboardRequest(input: RequestInfo | URL | string) {
+  return String(input).split("?", 1)[0] === "/api/projects";
 }
 
 function deferred<T>() {

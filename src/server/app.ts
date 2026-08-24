@@ -118,7 +118,7 @@ class HttpError extends Error {
   }
 }
 
-const DASHBOARD_CACHE_TTL_MS = 8_000;
+const DEFAULT_DASHBOARD_CACHE_TTL_MS = 8_000;
 const DASHBOARD_SNAPSHOT_CONCURRENCY = 4;
 
 export function createApp({
@@ -140,7 +140,7 @@ export function createApp({
     );
     const payload = buildDashboardResponse(snapshots);
     dashboardCache = {
-      expiresAt: Date.now() + DASHBOARD_CACHE_TTL_MS,
+      expiresAt: Date.now() + dashboardCacheTtlMs(),
       payload
     };
     return payload;
@@ -864,6 +864,11 @@ export function createApp({
   });
 
   return app;
+}
+
+function dashboardCacheTtlMs() {
+  const timeout = Number(process.env.WORKTREE_CONSOLE_DASHBOARD_CACHE_TTL_MS);
+  return Number.isInteger(timeout) && timeout >= 0 ? timeout : DEFAULT_DASHBOARD_CACHE_TTL_MS;
 }
 
 export async function snapshotProject(

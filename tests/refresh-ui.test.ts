@@ -8,7 +8,8 @@ import {
   shouldBackOffAutoRefresh,
   startRefreshRequest,
   shouldAutoRefresh,
-  shouldShowRefreshLoading
+  shouldShowRefreshLoading,
+  shouldUseDashboardCache
 } from "../src/lib/refresh-ui";
 
 describe("refresh-ui", () => {
@@ -27,6 +28,13 @@ describe("refresh-ui", () => {
     expect(shouldShowRefreshLoading("manual")).toBe(true);
     expect(shouldShowRefreshLoading("operation")).toBe(true);
     expect(shouldShowRefreshLoading("auto")).toBe(false);
+  });
+
+  it("uses cached dashboard data for initial and automatic refreshes", () => {
+    expect(shouldUseDashboardCache("initial")).toBe(true);
+    expect(shouldUseDashboardCache("auto")).toBe(true);
+    expect(shouldUseDashboardCache("manual")).toBe(false);
+    expect(shouldUseDashboardCache("operation")).toBe(false);
   });
 
   it("prevents stale refresh requests from applying after a newer request starts", () => {

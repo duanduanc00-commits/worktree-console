@@ -16,6 +16,10 @@ export function shouldShowRefreshLoading(trigger: RefreshTrigger) {
   return trigger !== "auto";
 }
 
+export function shouldUseDashboardCache(trigger: RefreshTrigger) {
+  return trigger === "initial" || trigger === "auto";
+}
+
 export function shouldBackOffAutoRefresh(
   durationMs: number,
   thresholdMs = AUTO_REFRESH_SLOW_THRESHOLD_MS

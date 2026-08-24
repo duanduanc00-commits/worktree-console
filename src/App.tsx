@@ -107,6 +107,7 @@ import {
   shouldBackOffAutoRefresh,
   startRefreshRequest,
   shouldShowRefreshLoading,
+  shouldUseDashboardCache,
   type RefreshRequestTracker,
   type RefreshTrigger
 } from "./lib/refresh-ui";
@@ -196,7 +197,7 @@ export function App() {
     }
     setError(null);
     try {
-      const nextDashboard = await getDashboard({ allowCache: trigger === "auto" });
+      const nextDashboard = await getDashboard({ allowCache: shouldUseDashboardCache(trigger) });
       if (isCurrentRefreshRequest(dashboardRefresh.current, requestId)) {
         setDashboard(nextDashboard);
         setSelectedId((current) => current ?? nextDashboard.projects[0]?.id ?? null);
