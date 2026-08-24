@@ -75,6 +75,46 @@ npm run build
 npm start -- --no-open
 ```
 
+## Local Docker
+
+You can run the packaged single-server console in Docker:
+
+```powershell
+docker compose up -d --build
+```
+
+Then open:
+
+- Console and API: `http://127.0.0.1:5273`
+
+Runtime data is stored in the named Docker volume `worktree-console-data` at `/data` inside the container.
+
+The included `docker-compose.yml` mounts the Windows `E:` and `C:` drives into the container and creates compatibility symlinks for Windows-style paths:
+
+```yaml
+services:
+  worktree-console:
+    volumes:
+      - worktree-console-data:/data
+      - "E:/:/host/e"
+      - "C:/:/host/c"
+```
+
+That lets the container resolve registered paths such as `E:/voice_assistant/voice-assistant` and Git-reported worktree paths such as `C:/Users/tinyphoton/.codex/worktrees/...`.
+
+If you add another Windows drive, mount it and add a matching symlink in the compose `command`, for example `D:` to `/host/d` and `/app/D:`.
+
+Docker mode is useful for a self-contained local console, but it is not equivalent to running directly on Windows:
+
+- Registry paths should use forward slashes, such as `E:/repo`, because Linux containers treat backslashes as literal characters.
+- Folder picker, open folder, and open terminal actions cannot control the Windows desktop from the container.
+- Service start/stop/restart controls apply to processes visible inside the container. They cannot safely manage arbitrary Windows host processes.
+- Health URLs that point back to host services usually need `host.docker.internal` instead of `127.0.0.1`.
+- The container sets Git `core.autocrlf=true` and `core.filemode=false` so Windows checkouts are not reported dirty only because of line endings or file modes.
+- The container sets `WORKTREE_CONSOLE_DASHBOARD_CACHE_TTL_MS=60000` so initial page loads and automatic refreshes can reuse a recent dashboard snapshot instead of rescanning every 30 seconds.
+- The container keeps normal Git commands at `WORKTREE_CONSOLE_GIT_TIMEOUT_MS=15000`, but uses `WORKTREE_CONSOLE_GIT_STATUS_TIMEOUT_MS=3000` for dashboard status scans. It also sets `WORKTREE_CONSOLE_GIT_STATUS_RETRY_UNTRACKED=false` so a slow `git status` over a Windows bind mount fails fast instead of running a second slow scan. Very large repositories may show lighter or unavailable status details instead of blocking the whole dashboard.
+- Git LFS is configured with skip-smudge behavior in Docker so large LFS files are not downloaded when the console inspects repositories.
+
 ## Development Commands
 
 ```powershell

@@ -1,0 +1,35 @@
+services:
+  worktree-console:
+    build:
+      context: .
+    image: worktree-console:local
+    container_name: worktree-console
+    ports:
+      - "5273:5273"
+    environment:
+      NODE_ENV: production
+      WORKTREE_CONSOLE_DATA_DIR: /data
+      WORKTREE_CONSOLE_DASHBOARD_CACHE_TTL_MS: "60000"
+      WORKTREE_CONSOLE_GIT_TIMEOUT_MS: "15000"
+      WORKTREE_CONSOLE_GIT_STATUS_TIMEOUT_MS: "3000"
+      WORKTREE_CONSOLE_GIT_STATUS_RETRY_UNTRACKED: "false"
+    command:
+      - sh
+      - -lc
+      - |
+        ln -sfn /host/e '/app/E:'
+        ln -sfn /host/c '/app/C:'
+        git config --global --add safe.directory '*'
+        git config --global core.autocrlf true
+        git config --global core.filemode false
+        git config --global filter.lfs.process 'git-lfs filter-process --skip'
+        git config --global filter.lfs.smudge 'git-lfs smudge --skip -- %f'
+        exec npm start -- --host 0.0.0.0 --port 5273 --data-dir /data --no-open
+    volumes:
+      - worktree-console-data:/data
+      - "E:/:/host/e"
+      - "C:/:/host/c"
+    restart: unless-stopped
+
+volumes:
+  worktree-console-data:
